@@ -21,29 +21,23 @@ import typing
 from abc import abstractmethod
 from dataclasses import dataclass, field
 from time import time
-from typing import Any, Dict, List, Literal, Mapping, Optional, Tuple, Type, Union, cast
+from typing import (Any, Dict, List, Literal, Mapping, Optional, Tuple, Type,
+                    Union, cast)
 
 import torch
 import torch.distributed as dist
-from rich.progress import (
-    BarColumn,
-    MofNCompleteColumn,
-    Progress,
-    TextColumn,
-    TimeElapsedColumn,
-)
+from rich.progress import (BarColumn, MofNCompleteColumn, Progress, TextColumn,
+                           TimeElapsedColumn)
 from torch import nn
+from torch.cuda.amp.grad_scaler import GradScaler
 from torch.nn import Parameter
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.cuda.amp.grad_scaler import GradScaler
 
 from nerfstudio.configs import base_config as cfg
 from nerfstudio.data.datamanagers.base_datamanager import (
-    DataManager,
-    VanillaDataManager,
-    VanillaDataManagerConfig,
-)
-from nerfstudio.engine.callbacks import TrainingCallback, TrainingCallbackAttributes
+    DataManager, VanillaDataManager, VanillaDataManagerConfig)
+from nerfstudio.engine.callbacks import (TrainingCallback,
+                                         TrainingCallbackAttributes)
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils import profiler
 
@@ -164,17 +158,24 @@ class Pipeline(nn.Module):
     @abstractmethod
     @profiler.time_function
     def get_eval_image_metrics_and_images(self, step: int):
-        """This function gets your evaluation loss dict. It needs to get the data
+        """This function gets your evaluation loss dict and images dict. It needs to get the data
         from the DataManager and feed it to the model's forward function
 
         Args:
             step: current iteration step
         """
 
+
+    @abstractmethod
+    @profiler.time_function
+    def get_average_eval_image_metrics_and_images(self, step: Optional[int] = None):
+        """iterate over all the images in the eval dataset and get the average and image dict."""
+
+
     @abstractmethod
     @profiler.time_function
     def get_average_eval_image_metrics(self, step: Optional[int] = None):
-        """Iterate over all the images in the eval dataset and get the average."""
+        """iterate over all the images in the eval dataset and get the average."""
 
     def load_pipeline(self, loaded_state: Dict[str, Any], step: int) -> None:
         """Load the checkpoint from the given path
@@ -335,6 +336,52 @@ class VanillaPipeline(Pipeline):
         metrics_dict["image_idx"] = image_idx
         assert "num_rays" not in metrics_dict
         metrics_dict["num_rays"] = len(camera_ray_bundle)
+        self.train()
+        return metrics_dict, images_dict
+    
+    @profiler.time_function
+    def get_average_eval_image_metrics_and_images(self, step: Optional[int] = None):
+        """Iterate over all the images in the eval dataset and get the average.
+
+        Returns:
+            metrics_dict: dictionary of metrics
+        """
+        self.eval()
+        metrics_dict_list = []
+        images_dict_list = []
+        num_images = len(self.datamanager.fixed_indices_eval_dataloader)
+        with Progress(
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TimeElapsedColumn(),
+            MofNCompleteColumn(),
+            transient=True,
+        ) as progress:
+            task = progress.add_task("[green]Evaluating all eval images...", total=num_images)
+            for camera_ray_bundle, batch in self.datamanager.fixed_indices_eval_dataloader:
+                # time this the following line
+                inner_start = time()
+                height, width = camera_ray_bundle.shape
+                num_rays = height * width
+                outputs = self.model.get_outputs_for_camera_ray_bundle(camera_ray_bundle)
+                metrics_dict, image_dict = self.model.get_image_metrics_and_images(outputs, batch)
+                images_dict_list.append(image_dict)
+                assert "num_rays_per_sec" not in metrics_dict
+                metrics_dict["num_rays_per_sec"] = num_rays / (time() - inner_start)
+                fps_str = "fps"
+                assert fps_str not in metrics_dict
+                metrics_dict[fps_str] = metrics_dict["num_rays_per_sec"] / (height * width)
+                metrics_dict_list.append(metrics_dict)
+                progress.advance(task)
+        # average the metrics list
+        metrics_dict = {}
+        for key in metrics_dict_list[0].keys():
+            metrics_dict[key] = float(
+                torch.mean(torch.tensor([metrics_dict[key] for metrics_dict in metrics_dict_list]))
+            )
+        images_dict = {}
+        for key in images_dict_list[0].keys():
+            images_dict[key] = [dict[key] for dict in images_dict_list]
         self.train()
         return metrics_dict, images_dict
 
