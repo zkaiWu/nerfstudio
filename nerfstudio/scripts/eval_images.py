@@ -67,6 +67,7 @@ class ComputePSNRWithImages:
                 img = img.permute(2, 0, 1).contiguous()
                 img_pil = transforms.ToPILImage()(img)
                 img_pil.save(os.path.join(images_save_dir, f"{idx}_{key}.png"))
+        CONSOLE.print(f"Saved images to: {images_save_dir}")
 
 
 def entrypoint():
