@@ -29,12 +29,10 @@ from rich.progress import track
 
 # TODO(1480) use pycolmap instead of colmap_parsing_utils
 # import pycolmap
-from nerfstudio.data.utils.colmap_parsing_utils import (
-    qvec2rotmat,
-    read_cameras_binary,
-    read_images_binary,
-    read_points3D_binary,
-)
+from nerfstudio.data.utils.colmap_parsing_utils import (qvec2rotmat,
+                                                        read_cameras_binary,
+                                                        read_images_binary,
+                                                        read_points3D_binary)
 from nerfstudio.process_data.process_data_utils import CameraModel
 from nerfstudio.utils import colormaps
 from nerfstudio.utils.rich_utils import CONSOLE, status

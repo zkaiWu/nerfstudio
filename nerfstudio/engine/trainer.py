@@ -33,19 +33,14 @@ from rich.table import Table
 from torch.cuda.amp.grad_scaler import GradScaler
 
 from nerfstudio.configs.experiment_config import ExperimentConfig
-from nerfstudio.engine.callbacks import (
-    TrainingCallback,
-    TrainingCallbackAttributes,
-    TrainingCallbackLocation,
-)
+from nerfstudio.engine.callbacks import (TrainingCallback,
+                                         TrainingCallbackAttributes,
+                                         TrainingCallbackLocation)
 from nerfstudio.engine.optimizers import Optimizers
 from nerfstudio.pipelines.base_pipeline import VanillaPipeline
 from nerfstudio.utils import profiler, writer
-from nerfstudio.utils.decorators import (
-    check_eval_enabled,
-    check_main_thread,
-    check_viewer_enabled,
-)
+from nerfstudio.utils.decorators import (check_eval_enabled, check_main_thread,
+                                         check_viewer_enabled)
 from nerfstudio.utils.misc import step_check
 from nerfstudio.utils.rich_utils import CONSOLE
 from nerfstudio.utils.writer import EventName, TimeWriter
@@ -89,6 +84,8 @@ class TrainerConfig(ExperimentConfig):
     """Path to checkpoint file."""
     log_gradients: bool = False
     """Optionally log gradients during training"""
+    load_optimizer: bool = True
+    """Whether to load the optimizer from the checkpoint."""
 
 
 class Trainer:
@@ -407,7 +404,8 @@ class Trainer:
             self._start_step = loaded_state["step"] + 1
             # load the checkpoints for pipeline, optimizers, and gradient scalar
             self.pipeline.load_pipeline(loaded_state["pipeline"], loaded_state["step"])
-            self.optimizers.load_optimizers(loaded_state["optimizers"])
+            if self.config.load_optimizer:
+                self.optimizers.load_optimizers(loaded_state["optimizers"])
             self.grad_scaler.load_state_dict(loaded_state["scalers"])
             CONSOLE.print(f"Done loading Nerfstudio checkpoint from {load_path}")
         elif load_checkpoint is not None:
@@ -416,7 +414,8 @@ class Trainer:
             self._start_step = loaded_state["step"] + 1
             # load the checkpoints for pipeline, optimizers, and gradient scalar
             self.pipeline.load_pipeline(loaded_state["pipeline"], loaded_state["step"])
-            self.optimizers.load_optimizers(loaded_state["optimizers"])
+            if self.config.load_optimizer:
+                self.optimizers.load_optimizers(loaded_state["optimizers"])
             self.grad_scaler.load_state_dict(loaded_state["scalers"])
             CONSOLE.print(f"Done loading Nerfstudio checkpoint from {load_checkpoint}")
         else:

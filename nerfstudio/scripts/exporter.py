@@ -28,21 +28,21 @@ from typing import List, Optional, Tuple, Union, cast
 
 import numpy as np
 import open3d as o3d
+import plyfile
+import skimage.measure
 import torch
 import tyro
 from typing_extensions import Annotated, Literal
 
-from nerfstudio.cameras.rays import RayBundle
+from nerfstudio.cameras.rays import Frustums, RayBundle, RaySamples
 from nerfstudio.data.datamanagers.base_datamanager import VanillaDataManager
 from nerfstudio.exporter import texture_utils, tsdf_utils
-from nerfstudio.exporter.exporter_utils import (
-    collect_camera_poses,
-    generate_point_cloud,
-    get_mesh_from_filename,
-)
-from nerfstudio.exporter.marching_cubes import (
-    generate_mesh_with_multires_marching_cubes,
-)
+from nerfstudio.exporter.exporter_utils import (collect_camera_poses,
+                                                generate_point_cloud,
+                                                get_mesh_from_filename)
+from nerfstudio.exporter.marching_cubes import \
+    generate_mesh_with_multires_marching_cubes
+from nerfstudio.fields.base_field import Field
 from nerfstudio.fields.sdf_field import SDFField
 from nerfstudio.pipelines.base_pipeline import Pipeline, VanillaPipeline
 from nerfstudio.utils.eval_utils import eval_setup
@@ -400,6 +400,206 @@ class ExportMarchingCubesMesh(Exporter):
 
 
 @dataclass
+class ExportMarchingCubesMeshCustom(Exporter):
+    """Export a mesh using marching cubes."""
+
+    isosurface_threshold: float = 0.0
+    """The isosurface threshold for extraction. For SDF based methods the surface is the zero level set."""
+    resolution: int = 512 
+    """Marching cube resolution."""
+    simplify_mesh: bool = False
+    """Whether to simplify the mesh."""
+    bounding_box_min: Tuple[float, float, float] = (-1.0, -1.0, -1.0)
+    """Minimum of the bounding box."""
+    bounding_box_max: Tuple[float, float, float] = (1.0, 1.0, 1.0)
+    """Maximum of the bounding box."""
+    px_per_uv_triangle: int = 4
+    """Number of pixels per UV triangle."""
+    unwrap_method: Literal["xatlas", "custom"] = "xatlas"
+    """The method to use for unwrapping the mesh."""
+    num_pixels_per_side: int = 2048
+    """If using xatlas for unwrapping, the pixels per side of the texture image."""
+    target_num_faces: Optional[int] = 50000
+    """Target number of faces for the mesh to texture."""
+    eval_rays_num: int = 50000 
+    """numbers of rays when query the density"""
+
+    def main(self) -> None:
+        """Main function."""
+        if not self.output_dir.exists():
+            self.output_dir.mkdir(parents=True)
+
+        _, pipeline, _, _ = eval_setup(self.load_config)
+
+        # TODO: Make this work with Density Field
+        # assert hasattr(pipeline.model.config, "sdf_field"), "Model must have an SDF field."
+        assert hasattr(pipeline.model, "field") or hasattr(pipeline.model, "field_fine"), "Model must have an field or field_fine"
+
+        CONSOLE.print("Extracting mesh with marching cubes... which may take a while")
+
+        # assert (
+        #     self.resolution % 512 == 0
+        # ), f"""resolution must be divisible by 512, got {self.resolution}.
+        # This is important because the algorithm uses a multi-resolution approach
+        # to evaluate the SDF where the minimum resolution is 512."""
+
+        # Extract mesh using marching cubes for sdf at a multi-scale resolution.
+        # multi_res_mesh = generate_mesh_with_multires_marching_cubes(
+        #     geometry_callable_field=lambda x: cast(SDFField, pipeline.model.field)
+        #     .forward_geonetwork(x)[:, 0]
+        #     .contiguous(),
+        #     resolution=self.resolution,
+        #     bounding_box_min=self.bounding_box_min,
+        #     bounding_box_max=self.bounding_box_max,
+        #     isosurface_threshold=self.isosurface_threshold,
+        #     coarse_mask=None,
+        # )
+
+        # compute sample points
+        # bounding_box = [self.bounding_box_max[0] - self.bounding_box_min[0], self.bounding_box_max[0] - self.bounding_box_min[1], self.bounding_box_max[2] - self.bounding_box_min[2]]
+        # # grid_size = torch.tensor(list(self.bounding_box_max)) - torch.tensor(list(self.bounding_box_min))
+        # print(grid_size.shape)
+        # samples = torch.stack(torch.meshgrid(
+        #     torch.linspace(0, 1, self.resolution),
+        #     torch.linspace(0, 1, self.resolution),
+        #     torch.linspace(0, 1, self.resolution),
+        # ), -1).to(pipeline.device)
+        xy_samples = torch.stack(torch.meshgrid(
+            torch.linspace(0, 1, self.resolution),
+            torch.linspace(0, 1, self.resolution), 
+        ), -1).to(pipeline.device)
+        xy_samples = xy_samples.reshape(-1, 2)
+
+        xy_samples[:, 0] = self.bounding_box_min[0] * (1 - xy_samples[:, 0]) + self.bounding_box_max[0] * xy_samples[:, 0]
+        xy_samples[:, 1] = self.bounding_box_min[1] * (1 - xy_samples[:, 1]) + self.bounding_box_max[1] * xy_samples[:, 1]
+        xy_plane_samples = torch.cat([xy_samples, torch.zeros_like(xy_samples[:, :1])], -1)
+
+        
+
+        rays_num = xy_plane_samples.shape[0]
+        # compute density
+        field:Field
+        if hasattr(pipeline.model, "field"):
+            field = pipeline.model.field
+        elif hasattr(pipeline.model, "field_fine"):
+            field = pipeline.model.field_fine
+        alpha_list = []
+        print("self.eval_rays_num: ", self.eval_rays_num)
+
+        for start_idx in range(0, rays_num, self.eval_rays_num):
+            end_idx = min(start_idx + self.eval_rays_num, rays_num)
+            xy_plane_samples_batch = xy_plane_samples[start_idx:end_idx]
+            # directions_batch = directions[start_idx:end_idx]
+            # z_samples_batch = z_samples[start_idx:end_idx]
+            directions_batch = torch.tensor([[0., 0., 1.]]).repeat(xy_plane_samples_batch.shape[0], 1).to(pipeline.device)
+            z_samples_batch = torch.linspace(0, 1, self.resolution)
+            z_samples_batch = self.bounding_box_min[2] * (1 - z_samples_batch) + self.bounding_box_max[2] *z_samples_batch 
+            z_samples_batch = z_samples_batch.reshape(-1, 1).unsqueeze(0).repeat(xy_plane_samples_batch.shape[0], 1, 1).to(pipeline.device)
+            dists = z_samples_batch[:, 1:] - z_samples_batch[:, :-1]
+            dists = torch.cat([dists, torch.Tensor([1e10]).expand(dists[:, :1].shape).to(pipeline.device)], -2)
+        
+            frustums = Frustums(
+                origins=xy_plane_samples_batch.unsqueeze(1),  # [..., 1, 3]
+                directions=directions_batch.unsqueeze(1),  # [..., 1, 3]
+                starts=z_samples_batch,  # [..., num_samples, 1]
+                ends=z_samples_batch,  # [..., num_samples, 1]
+                pixel_area=z_samples_batch,                   # NOTE: no use and we just give a fake value 
+            )
+
+            ray_samples:RaySamples = RaySamples(
+                frustums=frustums,
+            )
+
+            # origins = ray_samples.frustums.origins.reshape(-1, 3)
+            # pts = ray_samples.frustums.get_positions().reshape(-1, 3)
+            # print(origins)
+
+            # import pdb; pdb.set_trace()
+            with torch.no_grad():
+                sigma_batch = field.get_density(ray_samples)
+                if isinstance(sigma_batch, tuple):
+                    sigma_batch = sigma_batch[0]
+                alpha_batch = 1 - torch.exp(-sigma_batch * dists)
+                alpha_list.append(alpha_batch)
+
+        
+        # sigma = torch.cat(sigma_list, 0)
+        # alpha = 1 - torch.exp(-sigma * dists)
+        alpha = torch.cat(alpha_list, 0)
+        alpha = alpha.reshape((self.resolution, self.resolution, self.resolution))
+
+        filename = self.output_dir / "marching_cubes_mesh.ply"
+
+        bbox = torch.tensor([self.bounding_box_min, self.bounding_box_max])
+
+        self.convert_sdf_samples_to_ply(alpha.cpu(), filename, bbox=bbox, level=0.005)
+
+
+    def convert_sdf_samples_to_ply(
+        self,
+        pytorch_3d_sdf_tensor,
+        ply_filename_out,
+        bbox,
+        level=0.5,
+        offset=None,
+        scale=None,
+    ):
+        """
+        Convert sdf samples to .ply
+
+        :param pytorch_3d_sdf_tensor: a torch.FloatTensor of shape (n,n,n)
+        :voxel_grid_origin: a list of three floats: the bottom, left, down origin of the voxel grid
+        :voxel_size: float, the size of the voxels
+        :ply_filename_out: string, path of the filename to save to
+
+        This function adapted from: https://github.com/RobotLocomotion/spartan
+        """
+
+        numpy_3d_sdf_tensor = pytorch_3d_sdf_tensor.numpy()
+        voxel_size = list((bbox[1]-bbox[0]) / np.array(pytorch_3d_sdf_tensor.shape))
+
+        verts, faces, normals, values = skimage.measure.marching_cubes(
+            numpy_3d_sdf_tensor, level=level, spacing=voxel_size
+        )
+        faces = faces[...,::-1] # inverse face orientation
+
+        # transform from voxel coordinates to camera coordinates
+        # note x and y are flipped in the output of marching_cubes
+        mesh_points = np.zeros_like(verts)
+        mesh_points[:, 0] = bbox[0,0] + verts[:, 0]
+        mesh_points[:, 1] = bbox[0,1] + verts[:, 1]
+        mesh_points[:, 2] = bbox[0,2] + verts[:, 2]
+
+        # apply additional offset and scale
+        if scale is not None:
+            mesh_points = mesh_points / scale
+        if offset is not None:
+            mesh_points = mesh_points - offset
+
+        # try writing to the ply file
+
+        num_verts = verts.shape[0]
+        num_faces = faces.shape[0]
+
+        verts_tuple = np.zeros((num_verts,), dtype=[("x", "f4"), ("y", "f4"), ("z", "f4")])
+
+        for i in range(0, num_verts):
+            verts_tuple[i] = tuple(mesh_points[i, :])
+
+        faces_building = []
+        for i in range(0, num_faces):
+            faces_building.append(((faces[i, :].tolist(),)))
+        faces_tuple = np.array(faces_building, dtype=[("vertex_indices", "i4", (3,))])
+
+        el_verts = plyfile.PlyElement.describe(verts_tuple, "vertex")
+        el_faces = plyfile.PlyElement.describe(faces_tuple, "face")
+
+        ply_data = plyfile.PlyData([el_verts, el_faces])
+        print("saving mesh to %s" % (ply_filename_out))
+        ply_data.write(ply_filename_out)
+
+
+@dataclass
 class ExportCameraPoses(Exporter):
     """
     Export camera poses to a .json file.
@@ -434,6 +634,7 @@ Commands = tyro.conf.FlagConversionOff[
         Annotated[ExportPoissonMesh, tyro.conf.subcommand(name="poisson")],
         Annotated[ExportMarchingCubesMesh, tyro.conf.subcommand(name="marching-cubes")],
         Annotated[ExportCameraPoses, tyro.conf.subcommand(name="cameras")],
+        Annotated[ExportMarchingCubesMeshCustom, tyro.conf.subcommand(name="marching-cubes-custom")]
     ]
 ]
 
