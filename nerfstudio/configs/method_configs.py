@@ -367,22 +367,25 @@ method_configs["eg3d"] = TrainerConfig(
     method_name="eg3d",
     steps_per_eval_batch=500,
     steps_per_save=2000,
-    max_num_iterations=30000,
+    steps_per_eval_all_images=25000,
+    max_num_iterations=30001,
     pipeline=VanillaPipelineConfig(
         datamanager=VanillaDataManagerConfig(
             dataparser=BlenderDataParserConfig(),
+            train_num_rays_per_batch=4096,
+            eval_num_rays_per_batch=4096,
         ),
         # model=VanillaModelConfig(_target=NeRFModel),
         model=Eg3dModelConfig()
     ),
     optimizers={
         "fields": {
-            "optimizer": AdamOptimizerConfig(lr=0.001),
-            "scheduler": ExponentialDecaySchedulerConfig(lr_final=0.0001, max_steps=200000),
+            "optimizer": AdamOptimizerConfig(lr=0.01, eps=1e-12),
+            "scheduler": CosineDecaySchedulerConfig(warm_up_end=512, max_steps=30000),
         },
         "encodings": {
-            "optimizer": AdamOptimizerConfig(lr=0.02),
-            "scheduler": ExponentialDecaySchedulerConfig(lr_final=0.002, max_steps=200000),
+            "optimizer": AdamOptimizerConfig(lr=0.01, eps=1e-12),
+            "scheduler": CosineDecaySchedulerConfig(warm_up_end=512, max_steps=30000),
         },
     },
     viewer=ViewerConfig(num_rays_per_chunk=1 << 15),

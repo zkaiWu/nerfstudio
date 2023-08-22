@@ -530,7 +530,7 @@ class TriplaneEncoding(Encoding):
         resolution: int = 32,
         num_components: int = 64,
         init_scale: float = 0.1,
-        reduce: Literal["sum", "product"] = "sum",
+        reduce: Literal["sum", "product", "mean"] = "sum",
     ) -> None:
         super().__init__(in_dim=3)
 
@@ -542,6 +542,8 @@ class TriplaneEncoding(Encoding):
         self.plane_coef = nn.Parameter(
             self.init_scale * torch.randn((3, self.num_components, self.resolution, self.resolution))
         )
+
+        nn.init.uniform_(self.plane_coef, a=0.1, b=0.5)
 
     def get_out_dim(self) -> int:
         return self.num_components
@@ -555,9 +557,9 @@ class TriplaneEncoding(Encoding):
         plane_coord = torch.stack([in_tensor[..., [0, 1]], in_tensor[..., [0, 2]], in_tensor[..., [1, 2]]], dim=0)
 
         # Stop gradients from going to sampler
-        plane_coord = plane_coord.detach().view(3, -1, 1, 2)
+        plane_coord = plane_coord.detach().view(3, -1, 1, 2)                    #DEBUG: check the channels and should it detach
         plane_features = F.grid_sample(
-            self.plane_coef, plane_coord, align_corners=True
+            self.plane_coef, plane_coord, align_corners=True, padding_mode='border'
         )  # [3, num_components, flattened_bs, 1]
 
         if self.reduce == "product":
@@ -654,6 +656,7 @@ class KPlanesEncoding(Encoding):
         for ci, coo_comb in enumerate(self.coo_combs):
             grid = self.plane_coefs[ci].unsqueeze(0)  # [1, feature_dim, reso1, reso2]
             coords = in_tensor[..., coo_comb].view(1, 1, -1, 2)  # [1, 1, flattened_bs, 2]
+            # import pdb; pdb.set_trace()
             interp = F.grid_sample(
                 grid, coords, align_corners=True, padding_mode="border"
             )  # [1, output_dim, 1, flattened_bs]

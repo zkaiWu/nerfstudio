@@ -87,7 +87,7 @@
 
 
 CUDA_VISIBLE_DEVICES=2 \
-ns-train kplanes-importance --experiment-name blender_64x64_kplanes_trires256_lesssample_rgbcoarselossAndTvlossDisL_sumReduce_TV0.01_DisL1e-3/drums \
+ns-train kplanes-importance --experiment-name blender_64x64_kplanes_trires256_lesssample_rgbcoarselossAndTvlossDisL_sumReduce_TV0.01_DisL1e-3_debug/drums \
     --pipeline.model.grid-base-resolution 256 256 256\
     --pipeline.model.grid-feature-dim 48 \
     --pipeline.model.multiscale-res 1 \

@@ -17,6 +17,11 @@
 
 from typing import Dict, Optional
 
+try:
+    import tinycudann as tcnn
+except ImportError:
+    # tinycudann module doesn't exist
+    pass
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -25,6 +30,7 @@ from torch.nn.parameter import Parameter
 
 from nerfstudio.cameras.rays import RaySamples
 from nerfstudio.data.scene_box import SceneBox
+from nerfstudio.field_components.activations import trunc_exp
 from nerfstudio.field_components.encodings import (Encoding, Identity,
                                                    SHEncoding)
 from nerfstudio.field_components.field_heads import (FieldHeadNames,
@@ -70,29 +76,81 @@ class FullyConnectedLayer(torch.nn.Module):
 
 
 class OSGDecoder(torch.nn.Module):
-    def __init__(self, n_features, hidden_dim, decoder_output_dim):
+    def __init__(self, n_features, hidden_dim, decoder_output_dim, decoder_geofeat_dim, use_viewdirs):
         super().__init__()
         self.hidden_dim = hidden_dim 
+        self.use_viewdirs = use_viewdirs
+        self.decoder_geofeat_dim = decoder_geofeat_dim
 
-        self.net = torch.nn.Sequential(
-            FullyConnectedLayer(n_features, self.hidden_dim),
-            torch.nn.Softplus(),
-            FullyConnectedLayer(self.hidden_dim, self.hidden_dim), 
-            torch.nn.Softplus(),
-            FullyConnectedLayer(self.hidden_dim, self.hidden_dim), 
-            torch.nn.Softplus(),
-            FullyConnectedLayer(self.hidden_dim, 1 + decoder_output_dim),
-        )
+
+        if self.use_viewdirs:
+            # self.sigma_net = torch.nn.Sequential(
+            #     FullyConnectedLayer(n_features, self.hidden_dim),
+            #     torch.nn.Softplus(),
+            #     FullyConnectedLayer(self.hidden_dim, self.decoder_geofeat_dim + 1)
+            # )
+            self.sigma_net = tcnn.Network(
+                n_input_dims=n_features,
+                n_output_dims=self.decoder_geofeat_dim + 1,
+                network_config={
+                    "otype": "FullyFusedMLP",
+                    "activation": "ReLU",
+                    "output_activation": "None",
+                    "n_neurons": self.hidden_dim,
+                    "n_hidden_layers": 1,
+                },
+            )
+            self.direction_encoder = tcnn.Encoding(
+                    n_input_dims=3,
+                    encoding_config={
+                        "otype": "SphericalHarmonics",
+                        "degree": 4,
+                    },
+                ) 
+            color_feature_dim = decoder_geofeat_dim + self.direction_encoder.n_output_dims 
+            # self.color_net = torch.nn.Sequential(
+            #     FullyConnectedLayer(color_feature_dim, self.hidden_dim),
+            #     torch.nn.Softplus(),
+            #     FullyConnectedLayer(self.hidden_dim, decoder_output_dim),
+            # )
+            self.color_net = tcnn.Network(
+                n_input_dims=color_feature_dim,
+                n_output_dims=decoder_output_dim,
+                network_config={
+                    "otype": "FullyFusedMLP",
+                    "activation": "ReLU",
+                    "output_activation": "None",
+                    "n_neurons": 64,
+                    "n_hidden_layers": 2,
+                },
+            )
+        else:
+            self.net = torch.nn.Sequential(
+                FullyConnectedLayer(n_features, self.hidden_dim),
+                torch.nn.Softplus(),
+                FullyConnectedLayer(self.hidden_dim, 1 + decoder_output_dim),
+            )
 
     def forward(self, x, ray_directions=None):
         # Aggregate features
         # x = x.mean(1)
         N, M, C = x.shape
         x = x.view(N*M, C)
-        x = self.net(x)
-        x = x.view(N, M, -1)
-        rgb = torch.sigmoid(x[..., 1:])*(1 + 2*0.001) - 0.001 # Uses sigmoid clamping from MipNeRF
-        sigma = x[..., 0:1]
+        if self.use_viewdirs: 
+            geo_features = self.sigma_net(x)
+            geo_features, sigma = torch.split(geo_features, [self.decoder_geofeat_dim, 1], dim=-1)
+            direction_enc = self.direction_encoder(ray_directions)
+            color_features = [direction_enc, geo_features.view(-1, self.decoder_geofeat_dim)]
+            color_features = torch.cat(color_features, dim=-1)
+            rgb = self.color_net(color_features)
+            rgb = rgb.view(N, M, -1)
+            rgb = torch.sigmoid(rgb)*(1 + 2*0.001) - 0.001 # Uses sigmoid clamping from MipNeRF
+            sigma = sigma.view(N, M, -1)
+        else:
+            x = self.net(x)
+            x = x.view(N, M, -1)
+            rgb = torch.sigmoid(x[..., 1:])*(1 + 2*0.001) - 0.001 # Uses sigmoid clamping from MipNeRF
+            sigma = x[..., 0:1]
         return {'rgb': rgb, 'sigma': sigma}
 
 
@@ -111,6 +169,10 @@ class Eg3dField(Field):
         # the number of dimensions for the decoder hidden layer
         decoder_output_dim: int = 3,
         # the number of dimensions for the decoder output
+        decoder_geofeat_dim: int = 15,
+        # the number of dimensions for the decoder geo features
+        use_viewdirs: bool = True,
+        # whether to use view directions
     ) -> None:
         super().__init__()
         self.aabb = Parameter(aabb, requires_grad=False)
@@ -118,39 +180,46 @@ class Eg3dField(Field):
         self.decoder_hidden_dim = decoder_hidden_dim
         self.appearance_dim = appearance_dim
         self.decoder_output_dim = decoder_output_dim
+        self.decoder_geofeat_dim = decoder_geofeat_dim
+        self.use_viewdirs = use_viewdirs
 
         # self.osg_decoder = torch.nn.Sequential(
         #     FullyConnectedLayer(self.appearance_dim, self.hidden_dim),
         #     torch.nn.Softplus(),
         #     FullyConnectedLayer(self.hidden_dim, 1 + self.decoder_output_dim)
         # )
-        self.osg_decoder = OSGDecoder(self.appearance_dim, self.decoder_hidden_dim, self.decoder_output_dim)
+        self.osg_decoder = OSGDecoder(self.appearance_dim, self.decoder_hidden_dim, self.decoder_output_dim, self.decoder_geofeat_dim, self.use_viewdirs)
 
 
     def get_density(self, ray_samples: RaySamples) -> Tensor:
         positions = SceneBox.get_normalized_positions(ray_samples.frustums.get_positions(), self.aabb)
         positions = positions * 2 - 1
         triplane_feature = self.feature_encoding(positions)
-        out = self.osg_decoder(triplane_feature)
+        directions = ray_samples.frustums.directions.reshape(-1, 3)
+        out = self.osg_decoder(triplane_feature, directions)
         sigma = out['sigma']
         density = F.softplus(sigma - 1)
+        # density = trunc_exp(sigma - 1)
         return density
 
     def get_outputs(self, ray_samples: RaySamples, density_embedding: Optional[Tensor] = None) -> Tensor:
         positions = SceneBox.get_normalized_positions(ray_samples.frustums.get_positions(), self.aabb)
         positions = positions * 2 - 1
         triplane_features = self.feature_encoding(positions)
-        out = self.osg_decoder(triplane_features)
-        rgb = out['rgb'][..., :3]
+        directions = ray_samples.frustums.directions.reshape(-1, 3)
+        out = self.osg_decoder(triplane_features, directions)
+        rgb = out['rgb']
         return rgb
 
-    def get_density_and_outputs(self, ray_samples: RaySamples, density_embedding: Optional[Tensor] = None) -> Dict:
+    def get_density_and_outputs(self, ray_samples: RaySamples) -> Dict:
         positions = SceneBox.get_normalized_positions(ray_samples.frustums.get_positions(), self.aabb)
         positions = positions * 2 - 1
         triplane_features = self.feature_encoding(positions)
-        out = self.osg_decoder(triplane_features)
-        rgb = out['rgb'][..., :3]
+        directions = ray_samples.frustums.directions.reshape(-1, 3)
+        out = self.osg_decoder(triplane_features, directions)
+        rgb = out['rgb']
         sigma = out['sigma']
+        # density = trunc_exp(sigma - 1)
         density = F.softplus(sigma - 1)
         return {'rgb': rgb, 'density': density}
 
@@ -171,7 +240,7 @@ class Eg3dField(Field):
                 input_rays = ray_samples[mask, :]
                 # density = self.get_density(input_rays)
                 # rgb = self.get_outputs(input_rays, None)
-                out = self.get_density_and_outputs(input_rays, None)
+                out = self.get_density_and_outputs(input_rays)
                 density = out['density']
                 rgb = out['rgb']
                 base_density[mask] = density
@@ -184,7 +253,7 @@ class Eg3dField(Field):
         else:
             # density = self.get_density(ray_samples)
             # rgb = self.get_outputs(ray_samples, None)
-            out = self.get_density_and_outputs(ray_samples, None)
+            out = self.get_density_and_outputs(ray_samples)
             density = out['density']
             rgb = out['rgb']
 
