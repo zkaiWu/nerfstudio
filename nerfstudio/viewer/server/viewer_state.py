@@ -38,24 +38,21 @@ from nerfstudio.utils.writer import GLOBAL_BUFFER, EventName
 from nerfstudio.viewer.server import viewer_utils
 from nerfstudio.viewer.server.control_panel import ControlPanel
 from nerfstudio.viewer.server.gui_utils import parse_object
-from nerfstudio.viewer.server.render_state_machine import (
-    RenderAction,
-    RenderStateMachine,
-)
-from nerfstudio.viewer.server.utils import get_intrinsics_matrix_and_camera_to_world_h
-from nerfstudio.viewer.server.viewer_elements import ViewerControl, ViewerElement
+from nerfstudio.viewer.server.render_state_machine import (RenderAction,
+                                                           RenderStateMachine)
+from nerfstudio.viewer.server.utils import \
+    get_intrinsics_matrix_and_camera_to_world_h
+from nerfstudio.viewer.server.viewer_elements import (ViewerControl,
+                                                      ViewerElement)
 from nerfstudio.viewer.viser import ViserServer
-from nerfstudio.viewer.viser.messages import (
-    CameraMessage,
-    CameraPathOptionsRequest,
-    CameraPathPayloadMessage,
-    ClickMessage,
-    CropParamsMessage,
-    NerfstudioMessage,
-    SaveCheckpointMessage,
-    TimeConditionMessage,
-    TrainingStateMessage,
-)
+from nerfstudio.viewer.viser.messages import (CameraMessage,
+                                              CameraPathOptionsRequest,
+                                              CameraPathPayloadMessage,
+                                              ClickMessage, CropParamsMessage,
+                                              NerfstudioMessage,
+                                              SaveCheckpointMessage,
+                                              TimeConditionMessage,
+                                              TrainingStateMessage)
 
 if TYPE_CHECKING:
     from nerfstudio.engine.trainer import Trainer
@@ -366,6 +363,34 @@ class ViewerState:
             image = dataset[idx]["image"]
             bgr = image[..., [2, 1, 0]]
             camera_json = dataset.cameras.to_json(camera_idx=idx, image=bgr, max_size=100)
+            self.viser_server.add_dataset_image(idx=f"{idx:06d}", json=camera_json)
+
+        # draw the scene box (i.e., the bounding box)
+        self.viser_server.update_scene_box(dataset.scene_box)
+
+        # set the initial state whether to train or not
+        self.train_btn_state = train_state
+        self.viser_server.set_training_state(train_state)
+
+    def init_scene_empty_image(self, dataset: InputDataset, train_state: Literal["training", "paused", "completed"]) -> None:
+        """Draw some images and the scene aabb in the viewer.
+
+        Args:
+            dataset: dataset to render in the scene
+            train_state: Current status of training
+        """
+        self.viser_server.send_file_path_info(
+            config_base_dir=self.log_filename.parents[0],
+            data_base_dir=self.datapath,
+            export_path_name=self.log_filename.parent.stem,
+        )
+
+        # draw the training cameras and images
+        image_indices = self._pick_drawn_image_idxs(len(dataset))
+        for idx in image_indices:
+            # image = dataset[idx]["image"]
+            # bgr = image[..., [2, 1, 0]]
+            camera_json = dataset.cameras.to_json(camera_idx=idx, max_size=100)
             self.viser_server.add_dataset_image(idx=f"{idx:06d}", json=camera_json)
 
         # draw the scene box (i.e., the bounding box)

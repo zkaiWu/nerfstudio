@@ -484,7 +484,6 @@ class ExportMarchingCubesMeshCustom(Exporter):
         elif hasattr(pipeline.model, "field_fine"):
             field = pipeline.model.field_fine
         alpha_list = []
-        print("self.eval_rays_num: ", self.eval_rays_num)
 
         for start_idx in range(0, rays_num, self.eval_rays_num):
             end_idx = min(start_idx + self.eval_rays_num, rays_num)
@@ -562,7 +561,6 @@ class ExportMarchingCubesMeshCustom(Exporter):
             numpy_3d_sdf_tensor, level=level, spacing=voxel_size
         )
         faces = faces[...,::-1] # inverse face orientation
-
         # transform from voxel coordinates to camera coordinates
         # note x and y are flipped in the output of marching_cubes
         mesh_points = np.zeros_like(verts)
@@ -590,6 +588,10 @@ class ExportMarchingCubesMeshCustom(Exporter):
         for i in range(0, num_faces):
             faces_building.append(((faces[i, :].tolist(),)))
         faces_tuple = np.array(faces_building, dtype=[("vertex_indices", "i4", (3,))])
+        # x_isnan = np.isnan(verts_tuple["x"])
+        # if True in x_isnan:
+        #     print('error')
+            
 
         el_verts = plyfile.PlyElement.describe(verts_tuple, "vertex")
         el_faces = plyfile.PlyElement.describe(faces_tuple, "face")

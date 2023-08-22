@@ -23,6 +23,7 @@ from torch.nn.parameter import Parameter
 
 from nerfstudio.cameras.rays import RaySamples
 from nerfstudio.data.scene_box import SceneBox
+from nerfstudio.field_components.activations import trunc_exp
 from nerfstudio.field_components.encodings import (Encoding, Identity,
                                                    SHEncoding)
 from nerfstudio.field_components.field_heads import (FieldHeadNames,
@@ -31,7 +32,7 @@ from nerfstudio.field_components.mlp import MLP
 from nerfstudio.fields.base_field import Field
 
 
-class TensoRFField(Field):
+class TensoRFUniformField(Field):
     """TensoRF Field"""
 
     def __init__(
@@ -42,9 +43,7 @@ class TensoRFField(Field):
         # the encoding method used for appearance encoding outputs
         direction_encoding: Encoding = Identity(in_dim=3),
         # the encoding method used for ray direction
-        density_encoding: Encoding = Identity(in_dim=3),
-        # the tensor encoding method used for scene density
-        color_encoding: Encoding = Identity(in_dim=3),
+        uniform_encoding: Encoding = Identity(in_dim=3),
         # the tensor encoding method used for scene color
         appearance_dim: int = 27,
         # the number of dimensions for the appearance embedding
@@ -61,8 +60,7 @@ class TensoRFField(Field):
         self.aabb = Parameter(aabb, requires_grad=False)
         self.feature_encoding = feature_encoding
         self.direction_encoding = direction_encoding
-        self.density_encoding = density_encoding
-        self.color_encoding = color_encoding
+        self.uniform_encoding = self.uniform_encoding
 
         self.mlp_head = MLP(
             in_dim=appearance_dim + 3 + self.direction_encoding.get_out_dim() + self.feature_encoding.get_out_dim(),

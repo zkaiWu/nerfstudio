@@ -1,0 +1,12 @@
+{
+  "experiment_name": "blender_64x64_kplanes_trires256_lesssample_rgbcoarselossAndTvlossDisL_sumReduce_TV0.01_DisL1e-3/ficus",
+  "method_name": "kplanes-importance",
+  "checkpoint": "outputs/blender_64x64_kplanes_trires256_lesssample_rgbcoarselossAndTvlossDisL_sumReduce_TV0.01_DisL1e-3/ficus/kplanes-importance/2023-08-22_130631/nerfstudio_models/step-000029999.ckpt",
+  "results": {
+    "psnr": 33.19039535522461,
+    "ssim": 0.980874240398407,
+    "lpips": 0.004379892721772194,
+    "num_rays_per_sec": 189774.5,
+    "fps": 46.3316650390625
+  }
+}

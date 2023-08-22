@@ -56,7 +56,9 @@ from nerfstudio.field_components.temporal_distortions import \
     TemporalDistortionKind
 from nerfstudio.fields.sdf_field import SDFFieldConfig
 from nerfstudio.models.depth_nerfacto import DepthNerfactoModelConfig
+from nerfstudio.models.eg3d import Eg3dModel, Eg3dModelConfig
 from nerfstudio.models.instant_ngp import InstantNGPModelConfig
+from nerfstudio.models.kplanes_importance import KPlanesImportanceModelConfig
 from nerfstudio.models.mipnerf import MipNerfModel
 from nerfstudio.models.nerfacto import NerfactoModelConfig
 from nerfstudio.models.nerfplayer_nerfacto import NerfplayerNerfactoModelConfig
@@ -65,10 +67,12 @@ from nerfstudio.models.neus import NeuSModelConfig
 from nerfstudio.models.neus_facto import NeuSFactoModelConfig
 from nerfstudio.models.semantic_nerfw import SemanticNerfWModelConfig
 from nerfstudio.models.tensorf import TensoRFModelConfig
+from nerfstudio.models.tensorf_proposal import TensoRFProposalModelConfig
 from nerfstudio.models.vanilla_nerf import NeRFModel, VanillaModelConfig
 from nerfstudio.pipelines.base_pipeline import VanillaPipelineConfig
 from nerfstudio.pipelines.dynamic_batch import DynamicBatchPipelineConfig
 from nerfstudio.plugins.registry import discover_methods
+from nerfstudio.plugins.types import MethodSpecification
 
 method_configs: Dict[str, TrainerConfig] = {}
 descriptions = {
@@ -359,6 +363,70 @@ method_configs["vanilla-nerf"] = TrainerConfig(
     },
 )
 
+method_configs["eg3d"] = TrainerConfig(
+    method_name="eg3d",
+    steps_per_eval_batch=500,
+    steps_per_save=2000,
+    max_num_iterations=30000,
+    pipeline=VanillaPipelineConfig(
+        datamanager=VanillaDataManagerConfig(
+            dataparser=BlenderDataParserConfig(),
+        ),
+        # model=VanillaModelConfig(_target=NeRFModel),
+        model=Eg3dModelConfig()
+    ),
+    optimizers={
+        "fields": {
+            "optimizer": AdamOptimizerConfig(lr=0.001),
+            "scheduler": ExponentialDecaySchedulerConfig(lr_final=0.0001, max_steps=200000),
+        },
+        "encodings": {
+            "optimizer": AdamOptimizerConfig(lr=0.02),
+            "scheduler": ExponentialDecaySchedulerConfig(lr_final=0.002, max_steps=200000),
+        },
+    },
+    viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
+    vis="viewer",
+)
+
+method_configs["kplanes-importance"]=TrainerConfig(
+    method_name="kplanes-importance",
+    steps_per_eval_batch=500,
+    steps_per_save=2000,
+    steps_per_eval_all_images=25000,
+    max_num_iterations=30001,
+    mixed_precision=True,
+    pipeline=VanillaPipelineConfig(
+        datamanager=VanillaDataManagerConfig(
+            dataparser=BlenderDataParserConfig(),
+            train_num_rays_per_batch=4096,
+            eval_num_rays_per_batch=4096,
+        ),
+        model=KPlanesImportanceModelConfig(
+            eval_num_rays_per_chunk=1 << 15,
+            grid_base_resolution=[512, 512, 512],
+            grid_feature_dim=48,
+            multiscale_res=[1],
+            loss_coefficients={
+                "rgb": 1.0,
+                "rgb_coarse": 1.0,
+                "plane_tv": 0.01,
+                'distortion_coarse': 0.001,
+                'distortion_fine': 0.001,
+            },
+            background_color="white",
+        ),
+    ),
+    optimizers={
+        "fields": {
+            "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-12),
+            "scheduler": CosineDecaySchedulerConfig(warm_up_end=512, max_steps=30000),
+        },
+    },
+    viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
+    vis="viewer",
+)
+
 method_configs["tensorf"] = TrainerConfig(
     method_name="tensorf",
     steps_per_eval_batch=500,
@@ -383,6 +451,39 @@ method_configs["tensorf"] = TrainerConfig(
         "encodings": {
             "optimizer": AdamOptimizerConfig(lr=0.02),
             "scheduler": ExponentialDecaySchedulerConfig(lr_final=0.002, max_steps=200000),
+        },
+    },
+    viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
+    vis="viewer",
+)
+
+method_configs["tensorf-proposal"] = TrainerConfig(
+    method_name="tensorf-proposal",
+    steps_per_eval_batch=500,
+    steps_per_save=2000,
+    max_num_iterations=30000,
+    mixed_precision=False,
+    pipeline=VanillaPipelineConfig(
+        datamanager=VanillaDataManagerConfig(
+            dataparser=BlenderDataParserConfig(),
+            train_num_rays_per_batch=4096,
+            eval_num_rays_per_batch=4096,
+        ),
+        model=TensoRFProposalModelConfig(
+        ),
+    ),
+    optimizers={
+        "fields": {
+            "optimizer": AdamOptimizerConfig(lr=0.001),
+            "scheduler": CosineDecaySchedulerConfig(warm_up_end=512, max_steps=30000),
+        },
+        "encodings": {
+            "optimizer": AdamOptimizerConfig(lr=0.02),
+            "scheduler": CosineDecaySchedulerConfig(warm_up_end=512, max_steps=30000),
+        },
+        "proposal_networks": {
+            "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-12),
+            "scheduler": CosineDecaySchedulerConfig(warm_up_end=512, max_steps=30000),
         },
     },
     viewer=ViewerConfig(num_rays_per_chunk=1 << 15),

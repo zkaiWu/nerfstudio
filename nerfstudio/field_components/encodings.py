@@ -27,7 +27,8 @@ from jaxtyping import Float, Int, Shaped
 from torch import Tensor, nn
 
 from nerfstudio.field_components.base_field_component import FieldComponent
-from nerfstudio.utils.math import components_from_spherical_harmonics, expected_sin
+from nerfstudio.utils.math import (components_from_spherical_harmonics,
+                                   expected_sin)
 from nerfstudio.utils.printing import print_tcnn_speed_warning
 
 try:
@@ -561,6 +562,8 @@ class TriplaneEncoding(Encoding):
 
         if self.reduce == "product":
             plane_features = plane_features.prod(0).squeeze(-1).T  # [flattened_bs, num_components]
+        elif self.reduce == "mean":
+            plane_features = plane_features.mean(0).squeeze(-1).T
         else:
             plane_features = plane_features.sum(0).squeeze(-1).T
 

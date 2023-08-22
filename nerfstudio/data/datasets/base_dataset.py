@@ -117,6 +117,7 @@ class InputDataset(Dataset):
         del data
         return {}
 
+
     def __getitem__(self, image_idx: int) -> Dict:
         data = self.get_data(image_idx)
         return data
