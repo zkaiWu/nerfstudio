@@ -111,6 +111,7 @@ class Eg3dModelConfig(ModelConfig):
     """Loss coefficients."""
     use_viewdirs: bool = True
     """whether to use viewdirs to rgb net"""
+    use_tcnn: bool = True 
 
 
 class Eg3dModel(Model):
@@ -160,7 +161,8 @@ class Eg3dModel(Model):
             appearance_dim=self.config.grid_feature_dim,
             decoder_hidden_dim=64,
             decoder_output_dim=3,
-            use_viewdirs=self.config.use_viewdirs
+            use_viewdirs=self.config.use_viewdirs,
+            use_tcnn=self.config.use_tcnn
         ) 
 
         if self.config.is_contracted:

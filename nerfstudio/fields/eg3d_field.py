@@ -76,7 +76,7 @@ class FullyConnectedLayer(torch.nn.Module):
 
 
 class OSGDecoder(torch.nn.Module):
-    def __init__(self, n_features, hidden_dim, decoder_output_dim, decoder_geofeat_dim, use_viewdirs):
+    def __init__(self, n_features, hidden_dim, decoder_output_dim, decoder_geofeat_dim, use_viewdirs, use_tcnn):
         super().__init__()
         self.hidden_dim = hidden_dim 
         self.use_viewdirs = use_viewdirs
@@ -84,46 +84,58 @@ class OSGDecoder(torch.nn.Module):
 
 
         if self.use_viewdirs:
-            # self.sigma_net = torch.nn.Sequential(
-            #     FullyConnectedLayer(n_features, self.hidden_dim),
-            #     torch.nn.Softplus(),
-            #     FullyConnectedLayer(self.hidden_dim, self.decoder_geofeat_dim + 1)
-            # )
-            self.sigma_net = tcnn.Network(
-                n_input_dims=n_features,
-                n_output_dims=self.decoder_geofeat_dim + 1,
-                network_config={
-                    "otype": "FullyFusedMLP",
-                    "activation": "ReLU",
-                    "output_activation": "None",
-                    "n_neurons": self.hidden_dim,
-                    "n_hidden_layers": 1,
-                },
-            )
-            self.direction_encoder = tcnn.Encoding(
-                    n_input_dims=3,
-                    encoding_config={
-                        "otype": "SphericalHarmonics",
-                        "degree": 4,
+            if use_tcnn:
+                self.sigma_net = tcnn.Network(
+                    n_input_dims=n_features,
+                    n_output_dims=self.decoder_geofeat_dim + 1,
+                    network_config={
+                        "otype": "FullyFusedMLP",
+                        "activation": "ReLU",
+                        "output_activation": "None",
+                        "n_neurons": self.hidden_dim,
+                        "n_hidden_layers": 1,
                     },
+                )
+                self.direction_encoder = tcnn.Encoding(
+                        n_input_dims=3,
+                        encoding_config={
+                            "otype": "SphericalHarmonics",
+                            "degree": 4,
+                        },
+                    ) 
+                color_feature_dim = decoder_geofeat_dim + self.direction_encoder.n_output_dims 
+                self.color_net = tcnn.Network(
+                    n_input_dims=color_feature_dim,
+                    n_output_dims=decoder_output_dim,
+                    network_config={
+                        "otype": "FullyFusedMLP",
+                        "activation": "ReLU",
+                        "output_activation": "None",
+                        "n_neurons": 64,
+                        "n_hidden_layers": 2,
+                    },
+                )
+            else:
+                print('not use tcnn')
+                self.sigma_net = torch.nn.Sequential(
+                    FullyConnectedLayer(n_features, self.hidden_dim),
+                    # torch.nn.Softplus(),
+                    torch.nn.ReLU(),
+                    FullyConnectedLayer(self.hidden_dim, self.hidden_dim),
+                    torch.nn.ReLU(),
+                    FullyConnectedLayer(self.hidden_dim, self.decoder_geofeat_dim + 1), 
                 ) 
-            color_feature_dim = decoder_geofeat_dim + self.direction_encoder.n_output_dims 
-            # self.color_net = torch.nn.Sequential(
-            #     FullyConnectedLayer(color_feature_dim, self.hidden_dim),
-            #     torch.nn.Softplus(),
-            #     FullyConnectedLayer(self.hidden_dim, decoder_output_dim),
-            # )
-            self.color_net = tcnn.Network(
-                n_input_dims=color_feature_dim,
-                n_output_dims=decoder_output_dim,
-                network_config={
-                    "otype": "FullyFusedMLP",
-                    "activation": "ReLU",
-                    "output_activation": "None",
-                    "n_neurons": 64,
-                    "n_hidden_layers": 2,
-                },
-            )
+                self.direction_encoder = SHEncoding(levels=4)
+                color_feature_dim = decoder_geofeat_dim + self.direction_encoder.get_out_dim()
+                self.color_net = torch.nn.Sequential(
+                    FullyConnectedLayer(color_feature_dim, self.hidden_dim),
+                    torch.nn.ReLU(),
+                    FullyConnectedLayer(self.hidden_dim, self.hidden_dim),
+                    torch.nn.ReLU(),
+                    FullyConnectedLayer(self.hidden_dim, self.hidden_dim),
+                    torch.nn.ReLU(),
+                    FullyConnectedLayer(self.hidden_dim, decoder_output_dim), 
+                )
         else:
             self.net = torch.nn.Sequential(
                 FullyConnectedLayer(n_features, self.hidden_dim),
@@ -173,6 +185,8 @@ class Eg3dField(Field):
         # the number of dimensions for the decoder geo features
         use_viewdirs: bool = True,
         # whether to use view directions
+        use_tcnn: bool = True,
+        # whether to use tcnn
     ) -> None:
         super().__init__()
         self.aabb = Parameter(aabb, requires_grad=False)
@@ -182,13 +196,14 @@ class Eg3dField(Field):
         self.decoder_output_dim = decoder_output_dim
         self.decoder_geofeat_dim = decoder_geofeat_dim
         self.use_viewdirs = use_viewdirs
+        self.use_tcnn = use_tcnn
 
         # self.osg_decoder = torch.nn.Sequential(
         #     FullyConnectedLayer(self.appearance_dim, self.hidden_dim),
         #     torch.nn.Softplus(),
         #     FullyConnectedLayer(self.hidden_dim, 1 + self.decoder_output_dim)
         # )
-        self.osg_decoder = OSGDecoder(self.appearance_dim, self.decoder_hidden_dim, self.decoder_output_dim, self.decoder_geofeat_dim, self.use_viewdirs)
+        self.osg_decoder = OSGDecoder(self.appearance_dim, self.decoder_hidden_dim, self.decoder_output_dim, self.decoder_geofeat_dim, self.use_viewdirs, self.use_tcnn)
 
 
     def get_density(self, ray_samples: RaySamples) -> Tensor:
