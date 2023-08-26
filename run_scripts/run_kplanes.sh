@@ -86,15 +86,42 @@
 #     --vis wandb \
 
 
+# CUDA_VISIBLE_DEVICES=2 \
+# ns-train kplanes-importance --experiment-name blender_64x64_kplanes_trires256_lesssample_rgbcoarselossAndTvlossDisL_sumReduce_TV0.01_DisL1e-3_debug/drums \
+#     --pipeline.model.grid-base-resolution 256 256 256\
+#     --pipeline.model.grid-feature-dim 48 \
+#     --pipeline.model.multiscale-res 1 \
+#     --pipeline.model.num_samples 128 \
+#     --pipeline.model.num_importance_samples 64 \
+#     --pipeline.model.reduce 'sum' \
+#     --pipeline.model.use-viewdirs True \
+#     --data="/data5/wuzhongkai/data/dreamfusion_data/blender/nerf_synthetic_64x64/drums" \
+#     --max-num-iterations 30000 \
+#     --vis wandb \
+
+
+CUDA_VISIBLE_DEVICES=0 \
+ns-train kplanes \
+    --experiment-name blender_256x256_kplanes/ficus \
+    --data=/data5/wuzhongkai/data/dreamfusion_data/blender/nerf_synthetic_256x256/ficus \
+    --vis wandb &\
+
+
+CUDA_VISIBLE_DEVICES=0 \
+ns-train kplanes \
+    --experiment-name blender_256x256_kplanes/drums \
+    --data=/data5/wuzhongkai/data/dreamfusion_data/blender/nerf_synthetic_256x256/drums \
+    --vis wandb &\
+
+
 CUDA_VISIBLE_DEVICES=2 \
-ns-train kplanes-importance --experiment-name blender_64x64_kplanes_trires256_lesssample_rgbcoarselossAndTvlossDisL_sumReduce_TV0.01_DisL1e-3_debug/drums \
-    --pipeline.model.grid-base-resolution 256 256 256\
-    --pipeline.model.grid-feature-dim 48 \
-    --pipeline.model.multiscale-res 1 \
-    --pipeline.model.num_samples 128 \
-    --pipeline.model.num_importance_samples 64 \
-    --pipeline.model.reduce 'sum' \
-    --pipeline.model.use-viewdirs True \
-    --data="/data5/wuzhongkai/data/dreamfusion_data/blender/nerf_synthetic_64x64/drums" \
-    --max-num-iterations 30000 \
-    --vis wandb \
+ns-train kplanes \
+    --experiment-name blender_256x256_kplanes/mic \
+    --data=/data5/wuzhongkai/data/dreamfusion_data/blender/nerf_synthetic_256x256/mic \
+    --vis wandb &\
+
+CUDA_VISIBLE_DEVICES=2 \
+ns-train kplanes \
+    --experiment-name blender_256x256_kplanes/materials \
+    --data=/data5/wuzhongkai/data/dreamfusion_data/blender/nerf_synthetic_256x256/materials \
+    --vis wandb &\

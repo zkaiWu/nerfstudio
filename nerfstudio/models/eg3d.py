@@ -112,6 +112,9 @@ class Eg3dModelConfig(ModelConfig):
     use_viewdirs: bool = True
     """whether to use viewdirs to rgb net"""
     use_tcnn: bool = True 
+    """whether to use tcnn"""
+    reduce: str = 'sum'
+    """reduce method for triplane encoding"""
 
 
 class Eg3dModel(Model):
@@ -152,6 +155,7 @@ class Eg3dModel(Model):
         self.triplane_encoding = TriplaneEncoding(
             resolution=self.config.grid_base_resolution[0],
             num_components=self.config.grid_feature_dim,
+            reduce=self.config.reduce
         )
         # self.triplane_encoding = KPlanesEncoding(self.config.grid_base_resolution, num_components=self.config.grid_feature_dim, reduce='sum')
 
@@ -162,7 +166,8 @@ class Eg3dModel(Model):
             decoder_hidden_dim=64,
             decoder_output_dim=3,
             use_viewdirs=self.config.use_viewdirs,
-            use_tcnn=self.config.use_tcnn
+            use_tcnn=self.config.use_tcnn,
+            spatial_distortion=scene_contraction
         ) 
 
         if self.config.is_contracted:

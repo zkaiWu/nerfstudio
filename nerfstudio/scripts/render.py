@@ -20,8 +20,8 @@ from __future__ import annotations
 
 import json
 import os
-import struct
 import shutil
+import struct
 import sys
 from contextlib import ExitStack
 from dataclasses import dataclass, field
@@ -30,28 +30,21 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 import mediapy as media
 import numpy as np
+import PIL.Image as Image
 import torch
 import tyro
 from jaxtyping import Float
 from rich import box, style
 from rich.panel import Panel
-from rich.progress import (
-    BarColumn,
-    Progress,
-    TaskProgressColumn,
-    TextColumn,
-    TimeElapsedColumn,
-    TimeRemainingColumn,
-)
+from rich.progress import (BarColumn, Progress, TaskProgressColumn, TextColumn,
+                           TimeElapsedColumn, TimeRemainingColumn)
 from rich.table import Table
 from torch import Tensor
 from typing_extensions import Annotated
 
-from nerfstudio.cameras.camera_paths import (
-    get_interpolated_camera_path,
-    get_path_from_json,
-    get_spiral_path,
-)
+from nerfstudio.cameras.camera_paths import (get_interpolated_camera_path,
+                                             get_path_from_json,
+                                             get_spiral_path)
 from nerfstudio.cameras.cameras import Cameras, CameraType
 from nerfstudio.data.datamanagers.base_datamanager import VanillaDataManager
 from nerfstudio.data.scene_box import SceneBox
@@ -161,6 +154,9 @@ def _render_trajectory_video(
                 render_image = np.concatenate(render_image, axis=1)
                 if output_format == "images":
                     if image_format == "png":
+                        # gt_image = pipeline.datamanager.eval_dataset.get_image(camera_idx).cpu().numpy()
+                        # gt_image = (gt_image * 255).astype(np.uint8)
+                        # Image.fromarray(gt_image).save(output_image_dir / f"{camera_idx:05d}_gt.png")
                         media.write_image(output_image_dir / f"{camera_idx:05d}.png", render_image, fmt="png")
                     if image_format == "jpeg":
                         media.write_image(
@@ -454,6 +450,7 @@ class RenderInterpolated(BaseRender):
             assert pipeline.datamanager.train_dataset is not None
             cameras = pipeline.datamanager.train_dataset.cameras
 
+
         seconds = self.interpolation_steps * len(cameras) / self.frame_rate
         camera_path = get_interpolated_camera_path(
             cameras=cameras,
@@ -470,6 +467,7 @@ class RenderInterpolated(BaseRender):
             seconds=seconds,
             output_format=self.output_format,
             colormap_options=self.colormap_options,
+            image_format=self.image_format,
         )
 
 

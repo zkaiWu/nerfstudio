@@ -25,12 +25,11 @@ import torch
 from PIL import Image
 
 from nerfstudio.cameras import camera_utils
-from nerfstudio.cameras.cameras import CAMERA_MODEL_TO_TYPE, Cameras, CameraType
-from nerfstudio.data.dataparsers.base_dataparser import (
-    DataParser,
-    DataParserConfig,
-    DataparserOutputs,
-)
+from nerfstudio.cameras.cameras import (CAMERA_MODEL_TO_TYPE, Cameras,
+                                        CameraType)
+from nerfstudio.data.dataparsers.base_dataparser import (DataParser,
+                                                         DataParserConfig,
+                                                         DataparserOutputs)
 from nerfstudio.data.scene_box import SceneBox
 from nerfstudio.utils.io import load_from_json
 from nerfstudio.utils.rich_utils import CONSOLE

@@ -559,7 +559,7 @@ class TriplaneEncoding(Encoding):
         # Stop gradients from going to sampler
         plane_coord = plane_coord.detach().view(3, -1, 1, 2)                    #DEBUG: check the channels and should it detach
         plane_features = F.grid_sample(
-            self.plane_coef, plane_coord, align_corners=True, padding_mode='border'
+            self.plane_coef, plane_coord, align_corners=True
         )  # [3, num_components, flattened_bs, 1]
 
         if self.reduce == "product":

@@ -36,6 +36,8 @@ from nerfstudio.field_components.encodings import (Encoding, Identity,
 from nerfstudio.field_components.field_heads import (FieldHeadNames,
                                                      RGBFieldHead)
 from nerfstudio.field_components.mlp import MLP
+from nerfstudio.field_components.spatial_distortions import (SceneContraction,
+                                                             SpatialDistortion)
 from nerfstudio.fields.base_field import Field
 
 
@@ -137,11 +139,31 @@ class OSGDecoder(torch.nn.Module):
                     FullyConnectedLayer(self.hidden_dim, decoder_output_dim), 
                 )
         else:
-            self.net = torch.nn.Sequential(
+            print('not use tcnn')
+            print('not use viewdirs')
+            self.sigma_net = torch.nn.Sequential(
                 FullyConnectedLayer(n_features, self.hidden_dim),
-                torch.nn.Softplus(),
-                FullyConnectedLayer(self.hidden_dim, 1 + decoder_output_dim),
+                # torch.nn.Softplus(),
+                torch.nn.ReLU(),
+                FullyConnectedLayer(self.hidden_dim, self.hidden_dim),
+                torch.nn.ReLU(),
+                FullyConnectedLayer(self.hidden_dim, self.decoder_geofeat_dim + 1), 
+            ) 
+            color_feature_dim = decoder_geofeat_dim
+            self.color_net = torch.nn.Sequential(
+                FullyConnectedLayer(color_feature_dim, self.hidden_dim),
+                torch.nn.ReLU(),
+                FullyConnectedLayer(self.hidden_dim, self.hidden_dim),
+                torch.nn.ReLU(),
+                FullyConnectedLayer(self.hidden_dim, self.hidden_dim),
+                torch.nn.ReLU(),
+                FullyConnectedLayer(self.hidden_dim, decoder_output_dim), 
             )
+            # self.net = torch.nn.Sequential(
+            #     FullyConnectedLayer(n_features, self.hidden_dim),
+            #     torch.nn.Softplus(),
+            #     FullyConnectedLayer(self.hidden_dim, 1 + decoder_output_dim),
+            # )
 
     def forward(self, x, ray_directions=None):
         # Aggregate features
@@ -159,10 +181,17 @@ class OSGDecoder(torch.nn.Module):
             rgb = torch.sigmoid(rgb)*(1 + 2*0.001) - 0.001 # Uses sigmoid clamping from MipNeRF
             sigma = sigma.view(N, M, -1)
         else:
-            x = self.net(x)
-            x = x.view(N, M, -1)
-            rgb = torch.sigmoid(x[..., 1:])*(1 + 2*0.001) - 0.001 # Uses sigmoid clamping from MipNeRF
-            sigma = x[..., 0:1]
+            # x = self.net(x)
+            # x = x.view(N, M, -1)
+            # rgb = torch.sigmoid(x[..., 1:])*(1 + 2*0.001) - 0.001 # Uses sigmoid clamping from MipNeRF
+            # sigma = x[..., 0:1]
+            geo_features = self.sigma_net(x)
+            geo_features, sigma = torch.split(geo_features, [self.decoder_geofeat_dim, 1], dim=-1)
+            color_features = geo_features.view(-1, self.decoder_geofeat_dim)
+            rgb = self.color_net(color_features)
+            rgb = rgb.view(N, M, -1)
+            rgb = torch.sigmoid(rgb)*(1 + 2*0.001) - 0.001 # Uses sigmoid clamping from MipNeRF
+            sigma = sigma.view(N, M, -1)
         return {'rgb': rgb, 'sigma': sigma}
 
 
@@ -187,6 +216,7 @@ class Eg3dField(Field):
         # whether to use view directions
         use_tcnn: bool = True,
         # whether to use tcnn
+        spatial_distortion: Optional[SpatialDistortion] = None,
     ) -> None:
         super().__init__()
         self.aabb = Parameter(aabb, requires_grad=False)
@@ -197,6 +227,7 @@ class Eg3dField(Field):
         self.decoder_geofeat_dim = decoder_geofeat_dim
         self.use_viewdirs = use_viewdirs
         self.use_tcnn = use_tcnn
+        self.spatial_distortion = spatial_distortion
 
         # self.osg_decoder = torch.nn.Sequential(
         #     FullyConnectedLayer(self.appearance_dim, self.hidden_dim),
@@ -207,7 +238,12 @@ class Eg3dField(Field):
 
 
     def get_density(self, ray_samples: RaySamples) -> Tensor:
-        positions = SceneBox.get_normalized_positions(ray_samples.frustums.get_positions(), self.aabb)
+        if self.spatial_distortion is not None:
+            positions = ray_samples.frustums.get_positions()
+            positions = self.spatial_distortion(positions)
+            positions = (positions + 2.0) / 4.0
+        else:
+            positions = SceneBox.get_normalized_positions(ray_samples.frustums.get_positions(), self.aabb)
         positions = positions * 2 - 1
         triplane_feature = self.feature_encoding(positions)
         directions = ray_samples.frustums.directions.reshape(-1, 3)
@@ -218,7 +254,13 @@ class Eg3dField(Field):
         return density
 
     def get_outputs(self, ray_samples: RaySamples, density_embedding: Optional[Tensor] = None) -> Tensor:
-        positions = SceneBox.get_normalized_positions(ray_samples.frustums.get_positions(), self.aabb)
+        if self.spatial_distortion is not None:
+            positions = ray_samples.frustums.get_positions()
+            positions = self.spatial_distortion(positions)
+            positions = (positions + 2.0) / 4.0
+        else:
+            positions = SceneBox.get_normalized_positions(ray_samples.frustums.get_positions(), self.aabb)
+        # positions = SceneBox.get_normalized_positions(ray_samples.frustums.get_positions(), self.aabb)
         positions = positions * 2 - 1
         triplane_features = self.feature_encoding(positions)
         directions = ray_samples.frustums.directions.reshape(-1, 3)
@@ -227,7 +269,13 @@ class Eg3dField(Field):
         return rgb
 
     def get_density_and_outputs(self, ray_samples: RaySamples) -> Dict:
-        positions = SceneBox.get_normalized_positions(ray_samples.frustums.get_positions(), self.aabb)
+        if self.spatial_distortion is not None:
+            positions = ray_samples.frustums.get_positions()
+            positions = self.spatial_distortion(positions)
+            positions = (positions + 2.0) / 4.0
+        else:
+            positions = SceneBox.get_normalized_positions(ray_samples.frustums.get_positions(), self.aabb)
+        # positions = SceneBox.get_normalized_positions(ray_samples.frustums.get_positions(), self.aabb)
         positions = positions * 2 - 1
         triplane_features = self.feature_encoding(positions)
         directions = ray_samples.frustums.directions.reshape(-1, 3)

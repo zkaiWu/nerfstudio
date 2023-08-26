@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 
 import imageio
@@ -329,7 +331,6 @@ def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=Fal
 # limitations under the License.
 
 """Data parser for blender dataset"""
-from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -340,11 +341,9 @@ import numpy as np
 import torch
 
 from nerfstudio.cameras.cameras import Cameras, CameraType
-from nerfstudio.data.dataparsers.base_dataparser import (
-    DataParser,
-    DataParserConfig,
-    DataparserOutputs,
-)
+from nerfstudio.data.dataparsers.base_dataparser import (DataParser,
+                                                         DataParserConfig,
+                                                         DataparserOutputs)
 from nerfstudio.data.scene_box import SceneBox
 from nerfstudio.utils.colors import get_color
 from nerfstudio.utils.io import load_from_json
