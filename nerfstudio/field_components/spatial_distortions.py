@@ -22,6 +22,8 @@ from functorch import jacrev, vmap
 from jaxtyping import Float
 from torch import Tensor, nn
 
+from nerfstudio.cameras.cameras import Cameras
+from nerfstudio.cameras.rays import RayBundle
 from nerfstudio.utils.math import Gaussians
 
 
@@ -88,3 +90,55 @@ class SceneContraction(SpatialDistortion):
             return Gaussians(mean=means, cov=cov)
 
         return contract(positions)
+
+
+class NDC(SpatialDistortion):
+    """
+
+        Use NDC Mapping, according to H, W, focal, near plane, and coordinate
+
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    def forward(self, height: Tensor, width: Tensor, f_x: Tensor, f_y: Tensor, ray_bundle: RayBundle) -> RayBundle:
+
+        near = 1.0
+        ori = ray_bundle.origins
+        dir = ray_bundle.directions
+
+        # height_bundle = height[camera_idx[..., 0]]
+        # width_bundle = width[camera_idx[..., 0]]
+        # f_x_bundle = f_x[camera_idx[..., 0]]
+        # f_y_bundle = f_y[camera_idx[..., 0]]
+
+        height_bundle = height.unsqueeze(0).repeat(ori.shape[0], 1)
+        width_bundle = width.unsqueeze(0).repeat(ori.shape[0], 1)
+        f_x_bundle = f_x.unsqueeze(0).repeat(ori.shape[0], 1)
+        f_y_bundle = f_y.unsqueeze(0).repeat(ori.shape[0], 1)
+
+        # Shift ray origins to near plane
+        t = -(near + ori[..., 2:3]) / dir[..., 2:3]
+        # ori = ori + t[...,None] * dir 
+        ori = ori + t * dir
+        
+        # Projection
+        o0 = -1./(width_bundle/(2.*f_x_bundle)) * ori[..., 0:1] / ori[..., 2:3]
+        o1 = -1./(height_bundle/(2.*f_y_bundle)) * ori[..., 1:2] / ori[..., 2:3]
+        o2 = 1. + 2. * near / ori[..., 2:3]
+
+        d0 = -1./(width_bundle/(2.*f_x_bundle)) * (dir[..., 0:1]/dir[..., 2:3] - ori[..., 0:1]/ori[..., 2:3])
+        d1 = -1./(height_bundle/(2.*f_y_bundle)) * (dir[..., 1:2]/dir[..., 2:3] - ori[..., 1:2]/ori[..., 2:3])
+        d2 = -2. * near / ori[..., 2:3]
+        
+        ori = torch.cat([o0,o1,o2], -1)
+        dir = torch.cat([d0,d1,d2], -1)
+
+        ray_bundle.origins = ori
+        ray_bundle.directions = dir
+
+        ray_bundle.nears = 0.0 * torch.ones((ray_bundle.origins.shape[0], 1), device=ray_bundle.origins.device)
+        ray_bundle.fars = 1.0 * torch.ones((ray_bundle.origins.shape[0], 1), device=ray_bundle.origins.device)
+
+        return ray_bundle 

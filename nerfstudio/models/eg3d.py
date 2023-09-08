@@ -18,6 +18,7 @@ Implementation of K-Planes (https://sarafridov.github.io/K-Planes/).
 
 from __future__ import annotations
 
+import copy
 import functools
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Type
@@ -38,7 +39,8 @@ from nerfstudio.engine.callbacks import (TrainingCallback,
 from nerfstudio.field_components.encodings import (KPlanesEncoding,
                                                    TriplaneEncoding)
 from nerfstudio.field_components.field_heads import FieldHeadNames
-from nerfstudio.field_components.spatial_distortions import SceneContraction
+from nerfstudio.field_components.spatial_distortions import (NDC,
+                                                             SceneContraction)
 from nerfstudio.fields.eg3d_field import Eg3dField
 from nerfstudio.fields.kplanes_importance_field import KPlanesImportanceField
 from nerfstudio.model_components.losses import (MSELoss, distortion_loss,
@@ -113,8 +115,10 @@ class Eg3dModelConfig(ModelConfig):
     """whether to use viewdirs to rgb net"""
     use_tcnn: bool = True 
     """whether to use tcnn"""
-    reduce: str = 'sum'
+    reduce: str = 'mean'
     """reduce method for triplane encoding"""
+    use_ndc: bool = False
+    """using ndc or not"""
 
 
 class Eg3dModel(Model):
@@ -133,7 +137,7 @@ class Eg3dModel(Model):
             scene_contraction = SceneContraction(order=float("inf"))
         else:
             scene_contraction = None
-
+        
         self.config.grid_base_resolution = [self.config.grid_base_resolution] * 3
         # Fields
         # self.field = KPlanesImportanceField(
@@ -196,15 +200,50 @@ class Eg3dModel(Model):
         self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True)
         self.temporal_distortion = len(self.config.grid_base_resolution) == 4  # for viewer
 
+        if self.config.use_ndc:
+            self.ndc = NDC()
+            self.register_buffer('height', torch.tensor(0.0))
+            self.register_buffer('width', torch.tensor(0.0))
+            self.register_buffer('fx', torch.tensor(0.0))
+            self.register_buffer('fy', torch.tensor(0.0))
+
+
+    def get_training_callbacks(
+        self, training_callback_attributes: TrainingCallbackAttributes
+    ) -> List[TrainingCallback]:
+        if self.config.use_ndc:
+            cameras = copy.deepcopy(training_callback_attributes.pipeline.datamanager.train_dataparser_outputs.cameras)
+            height = cameras.height[0].to(self.device)
+            width = cameras.width[0].to(self.device)
+            fx = cameras.fx[0].to(self.device)
+            fy = cameras.fy[0].to(self.device)
+            del self.height
+            del self.width
+            del self.fx
+            del self.fy
+            self.register_buffer('height', height)
+            self.register_buffer('width', width)
+            self.register_buffer('fx', fx)
+            self.register_buffer('fy', fy)
+
+        return []
+
+
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         param_groups = {
             "fields": list(self.field.parameters()),
         }
         return param_groups
 
+
     def get_outputs(self, ray_bundle: RayBundle):
 
+        if self.config.use_ndc:
+            assert self.ndc != None
+            ray_bundle = self.ndc(self.height, self.width, self.fx, self.fy, ray_bundle)
+
         ray_samples_uniform = self.initial_sampler(ray_bundle)
+        # torch.save(ray_samples_uniform.frustums.get_positions(), 'pos.pt')
         # dens, _ = self.field.get_density(ray_samples_uniform)
         field_outputs_coarse = self.field(ray_samples_uniform)
         density_coarse = field_outputs_coarse[FieldHeadNames.DENSITY]
@@ -225,7 +264,6 @@ class Eg3dModel(Model):
         depth = self.renderer_depth(weights=weights_fine, ray_samples=ray_samples_pdf)
         accumulation = self.renderer_accumulation(weights=weights_fine)
 
-
         outputs = {
             "rgb": rgb,
             "accumulation": accumulation,
@@ -240,6 +278,7 @@ class Eg3dModel(Model):
         }
 
         return outputs
+
 
     def get_metrics_dict(self, outputs, batch):
         image = batch["image"].to(self.device)
@@ -268,6 +307,7 @@ class Eg3dModel(Model):
 
         return metrics_dict
 
+
     def get_loss_dict(self, outputs, batch, metrics_dict=None):
         image = batch["image"].to(self.device)
 
@@ -282,6 +322,7 @@ class Eg3dModel(Model):
             loss_dict = misc.scale_dict(loss_dict, self.config.loss_coefficients)
 
         return loss_dict
+
 
     def get_image_metrics_and_images(
         self, outputs: Dict[str, torch.Tensor], batch: Dict[str, torch.Tensor]

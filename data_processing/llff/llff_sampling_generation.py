@@ -1,5 +1,8 @@
+
 from __future__ import annotations
 
+import argparse
+import json
 import os
 
 import imageio
@@ -74,7 +77,7 @@ def _load_data(basedir, factor=None, width=None, height=None, load_imgs=True):
     
     sfx = ''
     
-    if factor is not None and factor != 1:
+    if factor is not None:
         sfx = '_{}'.format(factor)
         _minify(basedir, factors=[factor])
         factor = factor
@@ -162,13 +165,12 @@ def render_path_spiral(c2w, up, rads, focal, zdelta, zrate, rots, N):
 
 def square_sampling_poses(c2w, up, height, width, focal, N):
     render_poses = []
-    rads = np.array(list(rads) + [1.])
     hwf = c2w[:,4:5]
     
     for i in range(N): 
-        height = np.random.uniform(low=-height, high=height)
-        width = np.random.uniform(low=-width, high=width)
-        c = np.dot(c2w[:3,:4], np.array([width, height, 0.0, 1.])) 
+        h_sampled = np.random.uniform(low=-height, high=height)
+        w_sampled = np.random.uniform(low=-width, high=width)
+        c = np.dot(c2w[:3,:4], np.array([w_sampled, h_sampled, 0.0, 1.])) 
         z = normalize(c - np.dot(c2w[:3,:4], np.array([0,0,-focal, 1.])))
         render_poses.append(np.concatenate([viewmatrix(z, up, c), hwf], 1))
     return render_poses
@@ -252,19 +254,19 @@ def spherify_poses(poses, bds):
     return poses_reset, new_poses, bds
     
 
-def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=False, path_zflat=False, square_sampling=False):
+def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=False, path_zflat=False, square_sampling=True):
     
 
     poses, bds, imgs, imgfiles = _load_data(basedir, factor=factor) # factor=8 downsamples original imgs by 8x
     print('Loaded', basedir, bds.min(), bds.max())
-    
+
     # Correct rotation matrix ordering and move variable dim to axis 0
     poses = np.concatenate([poses[:, 1:2, :], -poses[:, 0:1, :], poses[:, 2:, :]], 1)
     poses = np.moveaxis(poses, -1, 0).astype(np.float32)
     imgs = np.moveaxis(imgs, -1, 0).astype(np.float32)
     images = imgs
     bds = np.moveaxis(bds, -1, 0).astype(np.float32)
-    
+
     # Rescale if bd_factor is provided
     sc = 1. if bd_factor is None else 1./(bds.min() * bd_factor)
     poses[:,:3,3] *= sc
@@ -294,14 +296,16 @@ def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=Fal
         # Get radii for spiral path
         zdelta = close_depth * .2
         tt = poses[:,:3,3] # ptstocam(poses[:3,3,:].T, c2w).T
-        height = np.percentile(np.abs(tt[:, 0]), 90, 0)
-        width = np.percentile(np.abs(tt[:, 1]), 90, 0)
+        import pdb; pdb.set_trace()
+        height = np.percentile(np.abs(tt[:, 1]), 90, 0)
+        width = np.percentile(np.abs(tt[:, 0]), 90, 0)
         c2w_path = c2w
         N_views = 50 
         N_rots = 2
         render_poses = square_sampling_poses(c2w_path, up, height, width, focal, N=N_views)
 
     else:
+        print('spiral path sampling')
         c2w = poses_avg(poses)
         print('recentered', c2w.shape)
         print(c2w[:3,:4])
@@ -353,115 +357,100 @@ def load_llff_data(basedir, factor=8, recenter=True, bd_factor=.75, spherify=Fal
 
 
 
-"""Data parser for blender dataset"""
+def json_dict_generate(height, width, focal, poses):
+    camera_path = {}
+    camera_path["seconds"] = 4             # fake seconds
+    camera_path["camera_type"] = 'perspective'
+    # camera_path["render_height"] = camera_path["render_width"] = args.resolution
+    camera_path["render_height"] = height 
+    camera_path["render_width"] = width
+    camera_path["camera_path"] = []
+    camera_path['keyframes'] = []
+    camera_path['fps'] = 24
+    camera_path['is_cycle'] = False
+    camera_path['crop'] = None
+    camera_path['smoothness_value'] = 0.5
+    
 
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Type
+    fov = np.arctan(height / (2 * focal)) * 360 / np.pi 
 
-import imageio
-import numpy as np
-import torch
+    for i in range(poses.shape[0]):
+        metrix = poses[i]
+        meta_data = {
+            'camera_to_world': metrix.reshape(16).tolist(),
+            'fov': fov,
+            'aspect': 1
+        }
+        camera_path["camera_path"].append(meta_data)
+        matrix_str = custom_np_2_str(np.transpose(metrix).reshape(16))
+        keyframe_data = {
+            # 'matrix':  np.array2string(np.transpose(metrix).reshape(16), separator=',', prefix='[', suffix=']'),
+            'matrix': matrix_str,
+            'fov': fov,
+            'aspect': 1,
+            'properties': f'[["FOV",{fov}],["NAME","Camera {i}"],["TIME",{i}]]',
 
-from nerfstudio.cameras.cameras import Cameras, CameraType
-from nerfstudio.data.dataparsers.base_dataparser import (DataParser,
-                                                         DataParserConfig,
-                                                         DataparserOutputs)
-from nerfstudio.data.scene_box import SceneBox
-from nerfstudio.utils.colors import get_color
-from nerfstudio.utils.io import load_from_json
+        }
+        camera_path['keyframes'].append(keyframe_data)
 
-
-@dataclass
-class LlffDataParserConfig(DataParserConfig):
-    """Blender dataset parser config"""
-
-    _target: Type = field(default_factory=lambda: Llff)
-    """target class to instantiate"""
-    data: Path = Path("data/blender/lego")
-    """Directory specifying location of data."""
-    scale_factor: float = 1.0
-    """How much to scale the camera origins by."""
-    alpha_color: str = "white"
-    """alpha color of background"""
-    square_sampling_poses: bool = False
-    """using squre_sampling_to_sample pose"""
-    llff_factor: int = 8
-    """which factor to scale the height and width"""
+    return camera_path
 
 
-@dataclass
-class Llff(DataParser):
-    """Blender Dataset
-    Some of this code comes from https://github.com/yenchenlin/nerf-pytorch/blob/master/load_blender.py#L37.
-    """
+def custom_np_2_str(matrix: np.array):
+    str = '['
+    for i in matrix[:-1]:
+        if i == 0:
+            str += '0,'
+        else:
+            str += '{:.12f},'.format(i)
+    str += '{:.12f}'.format(matrix[-1]) if matrix[-1] != 0 else '0'
+    str += ']'
 
-    config: LlffDataParserConfig
+    return str
+    
 
-    def __init__(self, config: LlffDataParserConfig):
-        super().__init__(config=config)
-        self.data: Path = config.data
-        self.scale_factor: float = config.scale_factor
-        self.alpha_color = config.alpha_color
 
-    def _generate_dataparser_outputs(self, split="train"):
-        # in x,y,z order
-        scene_box = SceneBox(aabb=torch.tensor([[-1.5, -1.67, -1.], [1.5, 1.67, 1.]], dtype=torch.float32))
+def pose_sampling(args):
 
-        # scene_box = SceneBox(aabb=torch.tensor([[-3.5, -3.5, -3.5], [3.5, 3.5, 3.5]], dtype=torch.float32))
-        # scene_box = SceneBox(aabb=torch.tensor([[-5.0, -5.0, -5.0], [5.0, 5.0, 5.0]], dtype=torch.float32)) 
+    input_dir = args.input_dir
+    
+    for obj_name in os.listdir(input_dir):
+        if args.obj_name is not None and obj_name not in args.obj_name:
+            continue
 
-        images, poses, bds, render_poses, i_test, image_filenames = load_llff_data(basedir=self.data, factor=self.config.llff_factor, recenter=True, bd_factor=0.75)
 
-        i_test = [i_test]
-        i_val = i_test
-        i_train = np.array([i for i in np.arange(int(images.shape[0])) if
-                        (i not in i_test and i not in i_val)])
+        obj_dir = os.path.join(input_dir, obj_name)
+        images, poses, bds, render_poses, i_test, imgfiles = \
+            load_llff_data(obj_dir, factor=8, recenter=True, bd_factor=.75, spherify=False, path_zflat=False, square_sampling=True)
 
-        pose_train = poses[i_train]
-        pose_test = poses[i_test]
+        output_path = os.path.join(args.output_dir, f"{obj_name}.json")
+        os.makedirs(args.output_dir, exist_ok=True)
 
-        if split == 'train':
-            # image_filenames = image_filenames[i_train]
-            image_filenames = [p for i, p in enumerate(image_filenames) if i in i_train]
-            camera_to_world = pose_train[:, :3, :4]
-            focal_length = pose_train[:, 2, -1]
-            cy = pose_train[:, 0, -1] // 2
-            cx = pose_train[:, 1, -1] // 2
-        elif  split == 'val':
-            # image_filenames = image_filenames[i_test]
-            image_filenames = [p for i, p in enumerate(image_filenames) if i in i_test]
-            camera_to_world = pose_test[:, :3, :4]
-            focal_length = pose_test[:, 2, -1]
-            cy = pose_test[:, 0, -1] // 2
-            cx = pose_test[:, 1, -1] // 2
-        elif split == 'test':
-            image_filenames = []
-            camera_to_world = render_poses[:, :3, :4]
-            focal_length = render_poses[:, 2, -1]
-            cy = render_poses[:, 0, -1] // 2
-            cx = render_poses[:, 1, -1] // 2
+        h = float(render_poses[0, 0, 4])             # the same as factor
+        w = float(render_poses[0, 1, 4])
+        f = float(render_poses[0, 2, 4])
+        render_poses = render_poses[:, :, :4]
+        render_poses = np.concatenate([render_poses, np.array([0.0, 0.0, 0.0, 1.0]).reshape([1, 1, 4]).repeat(render_poses.shape[0], axis=0)], axis=1)
 
-        camera_to_world = torch.tensor(camera_to_world)
-        focal_length = torch.tensor(focal_length)
-        cy = torch.tensor(cy)
-        cx = torch.tensor(cx)
+        camera_path_dict = json_dict_generate(h, w, f, render_poses)
 
-        cameras = Cameras(
-            camera_to_worlds=camera_to_world,
-            fx=focal_length,
-            fy=focal_length,
-            cx=cx,
-            cy=cy,
-            camera_type=CameraType.PERSPECTIVE,
-        )
+        with open(output_path, 'w') as f:
+            json.dump(camera_path_dict, f)
 
-        dataparser_outputs = DataparserOutputs(
-            image_filenames=image_filenames,
-            cameras=cameras,
-            alpha_color=None,
-            scene_box=scene_box,
-            dataparser_scale=self.scale_factor,
-        )
 
-        return dataparser_outputs
+def parse_args():
+    parser = argparse.ArgumentParser(description='Blender LR image processor')
+    parser.add_argument('--input_dir', required=True, type=str, help='input image directory')
+    parser.add_argument('--output_dir', required=True, type=str, help='output image directory')
+    parser.add_argument('--obj_name', nargs='+', default=None, type=str, help='object name')
+    # parser.add_argument('--centre_crop', action='store_true', help='whether to centre crop')
+    args = parser.parse_args()
+    return args
+
+def main():
+    args = parse_args()
+    pose_sampling(args)
+
+
+if __name__ == '__main__':
+    main()

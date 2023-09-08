@@ -18,6 +18,7 @@ TensorRF implementation.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from typing import Dict, List, Literal, Tuple, Type, cast
 
@@ -38,12 +39,14 @@ from nerfstudio.field_components.encodings import (NeRFEncoding,
                                                    TensorVMEncoding,
                                                    TriplaneEncoding)
 from nerfstudio.field_components.field_heads import FieldHeadNames
+from nerfstudio.field_components.spatial_distortions import NDC
 from nerfstudio.fields.tensorf_field import TensoRFField
 from nerfstudio.model_components.losses import MSELoss, tv_loss
 from nerfstudio.model_components.ray_samplers import PDFSampler, UniformSampler
 from nerfstudio.model_components.renderers import (AccumulationRenderer,
                                                    DepthRenderer, RGBRenderer)
-from nerfstudio.model_components.scene_colliders import AABBBoxCollider
+from nerfstudio.model_components.scene_colliders import (AABBBoxCollider,
+                                                         NearFarCollider)
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils import colormaps, colors, misc
 
@@ -82,6 +85,12 @@ class TensoRFModelConfig(ModelConfig):
     tensorf_encoding: Literal["triplane", "vm", "cp"] = "vm"
     regularization: Literal["none", "l1", "tv"] = "l1"
     """Regularization method used in tensorf paper"""
+    use_ndc: bool = False
+    """whether to use ndc"""
+    near_plane: float = 2.0
+    """near plane of sampling"""
+    far_plane: float = 6.0
+    """far plane of sampling"""
 
 
 class TensoRFModel(Model):
@@ -157,6 +166,21 @@ class TensoRFModel(Model):
                 args=[self, training_callback_attributes],
             )
         ]
+
+        if self.config.use_ndc:
+            cameras = copy.deepcopy(training_callback_attributes.pipeline.datamanager.train_dataparser_outputs.cameras)
+            height = cameras.height[0].to(self.device)
+            width = cameras.width[0].to(self.device)
+            fx = cameras.fx[0].to(self.device)
+            fy = cameras.fy[0].to(self.device)
+            del self.height
+            del self.width
+            del self.fx
+            del self.fy
+            self.register_buffer('height', height)
+            self.register_buffer('width', width)
+            self.register_buffer('fx', fx)
+            self.register_buffer('fy', fy)
         return callbacks
 
     def update_to_step(self, step: int) -> None:
@@ -240,11 +264,19 @@ class TensoRFModel(Model):
 
         # colliders
         if self.config.enable_collider:
-            self.collider = AABBBoxCollider(scene_box=self.scene_box)
+            # self.collider = AABBBoxCollider(scene_box=self.scene_box)
+            self.collider = NearFarCollider(near_plane=self.config.near_plane, far_plane=self.config.far_plane)
 
         # regularizations
         if self.config.tensorf_encoding == "cp" and self.config.regularization == "tv":
             raise RuntimeError("TV reg not supported for CP decomposition")
+
+        if self.config.use_ndc:
+            self.ndc = NDC()
+            self.register_buffer('height', torch.tensor(0.0))
+            self.register_buffer('width', torch.tensor(0.0))
+            self.register_buffer('fx', torch.tensor(0.0))
+            self.register_buffer('fy', torch.tensor(0.0))
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         param_groups = {}
@@ -261,6 +293,10 @@ class TensoRFModel(Model):
         return param_groups
 
     def get_outputs(self, ray_bundle: RayBundle):
+
+        if self.config.use_ndc:
+            assert self.ndc != None
+            ray_bundle = self.ndc(self.height, self.width, self.fx, self.fy, ray_bundle)
         # uniform sampling
         ray_samples_uniform = self.sampler_uniform(ray_bundle)
         dens = self.field.get_density(ray_samples_uniform)

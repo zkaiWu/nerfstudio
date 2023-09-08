@@ -11,10 +11,10 @@ CIDX=$1
 
 
 CUDA_VISIBLE_DEVICES=$CIDX \
-ns-train tensorf --experiment-name blender_256x256_tensorf_triplane_debug/lego \
-    --data="/data5/wuzhongkai/data/dreamfusion_data/blender/nerf_synthetic_256x256/lego" \
+ns-train tensorf --experiment-name blender_256x256_tensorf_perframesr/lego \
+    --data="/data5/wuzhongkai/data/dreamfusion_data/blender/nerf_synthetic_256perframe/lego" \
     --pipeline.model.tensorf-encoding triplane \
-    --max-num-iterations 50000 \
+    --max-num-iterations 30000 \
     --vis wandb \
     blender-data \
 

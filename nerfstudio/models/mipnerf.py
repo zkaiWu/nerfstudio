@@ -17,6 +17,7 @@ Implementation of mip-NeRF.
 """
 from __future__ import annotations
 
+import copy
 from typing import Dict, List, Tuple
 
 import torch
@@ -26,16 +27,18 @@ from torchmetrics.functional import structural_similarity_index_measure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 from nerfstudio.cameras.rays import RayBundle
+from nerfstudio.engine.callbacks import (TrainingCallback,
+                                         TrainingCallbackAttributes,
+                                         TrainingCallbackLocation)
 from nerfstudio.field_components.encodings import NeRFEncoding
 from nerfstudio.field_components.field_heads import FieldHeadNames
+from nerfstudio.field_components.spatial_distortions import (NDC,
+                                                             SceneContraction)
 from nerfstudio.fields.vanilla_nerf_field import NeRFField
 from nerfstudio.model_components.losses import MSELoss
 from nerfstudio.model_components.ray_samplers import PDFSampler, UniformSampler
-from nerfstudio.model_components.renderers import (
-    AccumulationRenderer,
-    DepthRenderer,
-    RGBRenderer,
-)
+from nerfstudio.model_components.renderers import (AccumulationRenderer,
+                                                   DepthRenderer, RGBRenderer)
 from nerfstudio.models.base_model import Model
 from nerfstudio.models.vanilla_nerf import VanillaModelConfig
 from nerfstudio.utils import colormaps, colors, misc
@@ -93,6 +96,15 @@ class MipNerfModel(Model):
         self.ssim = structural_similarity_index_measure
         self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True)
 
+        if self.config.use_ndc:
+            self.ndc = NDC()
+            self.register_buffer('height', torch.tensor(0.0))
+            self.register_buffer('width', torch.tensor(0.0))
+            self.register_buffer('fx', torch.tensor(0.0))
+            self.register_buffer('fy', torch.tensor(0.0))
+
+
+
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         param_groups = {}
         if self.field is None:
@@ -100,11 +112,37 @@ class MipNerfModel(Model):
         param_groups["fields"] = list(self.field.parameters())
         return param_groups
 
+
+    def get_training_callbacks(
+        self, training_callback_attributes: TrainingCallbackAttributes
+    ) -> List[TrainingCallback]:
+        if self.config.use_ndc:
+            cameras = copy.deepcopy(training_callback_attributes.pipeline.datamanager.train_dataparser_outputs.cameras)
+            height = cameras.height[0].to(self.device)
+            width = cameras.width[0].to(self.device)
+            fx = cameras.fx[0].to(self.device)
+            fy = cameras.fy[0].to(self.device)
+            del self.height
+            del self.width
+            del self.fx
+            del self.fy
+            self.register_buffer('height', height)
+            self.register_buffer('width', width)
+            self.register_buffer('fx', fx)
+            self.register_buffer('fy', fy)
+
+        return []
+
+
     def get_outputs(self, ray_bundle: RayBundle):
         if self.field is None:
             raise ValueError("populate_fields() must be called before get_outputs")
 
         # uniform sampling
+        if self.config.use_ndc:
+            assert self.ndc != None
+            ray_bundle = self.ndc(self.height, self.width, self.fx, self.fy, ray_bundle)
+           
         ray_samples_uniform = self.sampler_uniform(ray_bundle)
 
         # First pass:

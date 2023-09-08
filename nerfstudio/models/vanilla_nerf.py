@@ -18,6 +18,7 @@ Implementation of vanilla nerf.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Tuple, Type
 
@@ -29,17 +30,20 @@ from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 from nerfstudio.cameras.rays import RayBundle
 from nerfstudio.configs.config_utils import to_immutable_dict
+from nerfstudio.engine.callbacks import (TrainingCallback,
+                                         TrainingCallbackAttributes,
+                                         TrainingCallbackLocation)
 from nerfstudio.field_components.encodings import NeRFEncoding
 from nerfstudio.field_components.field_heads import FieldHeadNames
-from nerfstudio.field_components.temporal_distortions import TemporalDistortionKind
+from nerfstudio.field_components.spatial_distortions import NDC
+from nerfstudio.field_components.temporal_distortions import \
+    TemporalDistortionKind
 from nerfstudio.fields.vanilla_nerf_field import NeRFField
 from nerfstudio.model_components.losses import MSELoss
 from nerfstudio.model_components.ray_samplers import PDFSampler, UniformSampler
-from nerfstudio.model_components.renderers import (
-    AccumulationRenderer,
-    DepthRenderer,
-    RGBRenderer,
-)
+from nerfstudio.model_components.renderers import (AccumulationRenderer,
+                                                   DepthRenderer, RGBRenderer)
+from nerfstudio.model_components.scene_colliders import NearFarCollider
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils import colormaps, colors, misc
 
@@ -58,6 +62,12 @@ class VanillaModelConfig(ModelConfig):
     """Specifies whether or not to include ray warping based on time."""
     temporal_distortion_params: Dict[str, Any] = to_immutable_dict({"kind": TemporalDistortionKind.DNERF})
     """Parameters to instantiate temporal distortion with"""
+    use_ndc: bool = False 
+    """whether to use ndc"""
+    near_plane: float = 2.0
+    """near plane"""
+    far_plane: float = 6.0
+    """far plane"""
 
 
 class NeRFModel(Model):
@@ -114,6 +124,9 @@ class NeRFModel(Model):
         self.renderer_accumulation = AccumulationRenderer()
         self.renderer_depth = DepthRenderer()
 
+
+        self.collider = NearFarCollider(near_plane=self.config.near_plane, far_plane=self.config.far_plane)
+
         # losses
         self.rgb_loss = MSELoss()
 
@@ -122,10 +135,39 @@ class NeRFModel(Model):
         self.ssim = structural_similarity_index_measure
         self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True)
 
+        if self.config.use_ndc:
+            self.ndc = NDC()
+            self.height = None
+            self.width = None
+            self.fx = None
+            self.fy = None
+            
+
         if getattr(self.config, "enable_temporal_distortion", False):
             params = self.config.temporal_distortion_params
             kind = params.pop("kind")
             self.temporal_distortion = kind.to_temporal_distortion(params)
+
+
+    def get_training_callbacks(
+        self, training_callback_attributes: TrainingCallbackAttributes
+    ) -> List[TrainingCallback]:
+        if self.config.use_ndc:
+            cameras = copy.deepcopy(training_callback_attributes.pipeline.datamanager.train_dataparser_outputs.cameras)
+            height = cameras.height.to(self.device)
+            width = cameras.width.to(self.device)
+            fx = cameras.fx.to(self.device)
+            fy = cameras.fy.to(self.device)
+            # self.register_buffer('cameras', cameras)
+            del self.height
+            del self.width
+            del self.fx
+            del self.fy
+            self.register_buffer('height', height)
+            self.register_buffer('width', width)
+            self.register_buffer('fx', fx)
+            self.register_buffer('fy', fy)
+        return []
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         param_groups = {}
@@ -140,6 +182,9 @@ class NeRFModel(Model):
         if self.field_coarse is None or self.field_fine is None:
             raise ValueError("populate_fields() must be called before get_outputs")
 
+        if self.config.use_ndc:
+            ray_bundle = self.ndc(self.height, self.width, self.fx, self.fy, ray_bundle)
+        
         # uniform sampling
         ray_samples_uniform = self.sampler_uniform(ray_bundle)
         if self.temporal_distortion is not None:

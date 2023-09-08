@@ -18,6 +18,7 @@ Implementation of K-Planes (https://sarafridov.github.io/K-Planes/).
 
 from __future__ import annotations
 
+import copy
 import functools
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Type
@@ -36,7 +37,8 @@ from nerfstudio.engine.callbacks import (TrainingCallback,
                                          TrainingCallbackAttributes,
                                          TrainingCallbackLocation)
 from nerfstudio.field_components.field_heads import FieldHeadNames
-from nerfstudio.field_components.spatial_distortions import SceneContraction
+from nerfstudio.field_components.spatial_distortions import (NDC,
+                                                             SceneContraction)
 from nerfstudio.fields.kplanes_importance_field import KPlanesImportanceField
 from nerfstudio.model_components.losses import (MSELoss, distortion_loss,
                                                 interlevel_loss)
@@ -115,6 +117,7 @@ class KPlanesImportanceModelConfig(ModelConfig):
     """which reduce method to use for gathering triplane feature"""
     use_viewdirs: bool = True
     """whether to use viewdirs to rgb net"""
+    use_ndc: bool = True
 
 
 class KPlanesImportanceModel(Model):
@@ -176,6 +179,33 @@ class KPlanesImportanceModel(Model):
         self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True)
         self.temporal_distortion = len(self.config.grid_base_resolution) == 4  # for viewer
 
+        if self.config.use_ndc:
+            self.ndc = NDC()
+            self.height = None
+            self.width = None
+            self.fx = None
+            self.fy = None
+
+    def get_training_callbacks(
+        self, training_callback_attributes: TrainingCallbackAttributes
+    ) -> List[TrainingCallback]:
+        cameras = copy.deepcopy(training_callback_attributes.pipeline.datamanager.train_dataparser_outputs.cameras)
+        height = cameras.height[0].to(self.device)
+        width = cameras.width[0].to(self.device)
+        fx = cameras.fx[0].to(self.device)
+        fy = cameras.fy[0].to(self.device)
+        # self.register_buffer('cameras', cameras)
+        del self.height
+        del self.width
+        del self.fx
+        del self.fy
+        self.register_buffer('height', height)
+        self.register_buffer('width', width)
+        self.register_buffer('fx', fx)
+        self.register_buffer('fy', fy)
+
+        return []
+
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         param_groups = {
             "fields": list(self.field.parameters())
@@ -183,6 +213,9 @@ class KPlanesImportanceModel(Model):
         return param_groups
 
     def get_outputs(self, ray_bundle: RayBundle):
+        if self.config.use_ndc:
+            assert self.ndc != None
+            ray_bundle = self.ndc(self.height, self.width, self.fx, self.fy, ray_bundle)
 
         ray_samples_uniform = self.initial_sampler(ray_bundle)
         # dens, _ = self.field.get_density(ray_samples_uniform)
@@ -192,6 +225,7 @@ class KPlanesImportanceModel(Model):
         rgb_coarse = self.renderer_rgb(rgb=field_outputs_coarse[FieldHeadNames.RGB], weights=weights_coarse)
         accumulation_coarse = self.renderer_accumulation(weights_coarse)
         depth_coarse = self.renderer_depth(weights_coarse, ray_samples_uniform)
+        # coarse_accumulation = self.renderer_accumulation(weights_fine)
         # coarse_accumulation = self.renderer_accumulation(weights_fine)
         # acc_mask = torch.where(coarse_accumulation < 0.0001, False, True).reshape(-1)
 

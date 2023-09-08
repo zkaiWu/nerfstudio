@@ -100,28 +100,28 @@
 #     --vis wandb \
 
 
-CUDA_VISIBLE_DEVICES=0 \
+# CUDA_VISIBLE_DEVICES=0 \
+# ns-train kplanes \
+#     --experiment-name blender_256x256_kplanes/ficus \
+#     --data=/data5/wuzhongkai/data/dreamfusion_data/blender/nerf_synthetic_256x256/ficus \
+#     --vis wandb &\
+
+
+# CUDA_VISIBLE_DEVICES=0 \
+# ns-train kplanes \
+#     --experiment-name blender_256x256_kplanes/drums \
+#     --data=/data5/wuzhongkai/data/dreamfusion_data/blender/nerf_synthetic_256x256/drums \
+#     --vis wandb &\
+
+
+# CUDA_VISIBLE_DEVICES=2 \
+# ns-train kplanes \
+#     --experiment-name blender_256x256_kplanes/mic \
+#     --data=/data5/wuzhongkai/data/dreamfusion_data/blender/nerf_synthetic_256x256/mic \
+#     --vis wandb &\
+
+CUDA_VISIBLE_DEVICES=3 \
 ns-train kplanes \
-    --experiment-name blender_256x256_kplanes/ficus \
-    --data=/data5/wuzhongkai/data/dreamfusion_data/blender/nerf_synthetic_256x256/ficus \
-    --vis wandb &\
-
-
-CUDA_VISIBLE_DEVICES=0 \
-ns-train kplanes \
-    --experiment-name blender_256x256_kplanes/drums \
-    --data=/data5/wuzhongkai/data/dreamfusion_data/blender/nerf_synthetic_256x256/drums \
-    --vis wandb &\
-
-
-CUDA_VISIBLE_DEVICES=2 \
-ns-train kplanes \
-    --experiment-name blender_256x256_kplanes/mic \
-    --data=/data5/wuzhongkai/data/dreamfusion_data/blender/nerf_synthetic_256x256/mic \
-    --vis wandb &\
-
-CUDA_VISIBLE_DEVICES=2 \
-ns-train kplanes \
-    --experiment-name blender_256x256_kplanes/materials \
-    --data=/data5/wuzhongkai/data/dreamfusion_data/blender/nerf_synthetic_256x256/materials \
+    --experiment-name blender_256x256_kplanes_perframesr/lego \
+    --data=/data5/wuzhongkai/data/dreamfusion_data/blender/nerf_synthetic_256perframe/lego \
     --vis wandb &\

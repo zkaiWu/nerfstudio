@@ -49,6 +49,7 @@ from nerfstudio.data.utils.dataloaders import (CacheDataloader,
 from nerfstudio.data.utils.nerfstudio_collate import nerfstudio_collate
 from nerfstudio.engine.callbacks import (TrainingCallback,
                                          TrainingCallbackAttributes)
+from nerfstudio.field_components.spatial_distortions import NDC
 from nerfstudio.model_components.ray_generators import RayGenerator
 from nerfstudio.utils.misc import IterableWrapper
 from nerfstudio.utils.rich_utils import CONSOLE
@@ -449,6 +450,7 @@ class VanillaDataManager(DataManager, Generic[TDataset]):
             self.train_camera_optimizer,
         )
 
+
     def setup_eval(self):
         """Sets up the data loader for evaluation"""
         assert self.eval_dataset is not None
@@ -482,6 +484,7 @@ class VanillaDataManager(DataManager, Generic[TDataset]):
             device=self.device,
             num_workers=self.world_size * 4,
         )
+
 
     def next_train(self, step: int) -> Tuple[RayBundle, Dict]:
         """Returns the next batch of data from the train dataloader."""

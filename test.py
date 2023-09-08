@@ -3,7 +3,7 @@ import torch
 
 
 def main():
-    ckpt = torch.load('/data5/wuzhongkai/proj/nerfstudio/outputs/mimic3d_ckpts/blender_64x64_eg3d_tvl1e-2_Disl1e-3_wviewdirs_trires256_softplus_wotcnn.ckpt')
+    ckpt = torch.load('/data5/wuzhongkai/proj/nerfstudio/outputs/llff/horns/eg3d/2023-08-28_232533/nerfstudio_models/step-000030000.ckpt')
     import pdb; pdb.set_trace()
     model_state_dict = ckpt['model_state_dict']
 

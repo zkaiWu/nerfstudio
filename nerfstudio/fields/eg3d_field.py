@@ -238,6 +238,7 @@ class Eg3dField(Field):
 
 
     def get_density(self, ray_samples: RaySamples) -> Tensor:
+
         if self.spatial_distortion is not None:
             positions = ray_samples.frustums.get_positions()
             positions = self.spatial_distortion(positions)
@@ -275,7 +276,6 @@ class Eg3dField(Field):
             positions = (positions + 2.0) / 4.0
         else:
             positions = SceneBox.get_normalized_positions(ray_samples.frustums.get_positions(), self.aabb)
-        # positions = SceneBox.get_normalized_positions(ray_samples.frustums.get_positions(), self.aabb)
         positions = positions * 2 - 1
         triplane_features = self.feature_encoding(positions)
         directions = ray_samples.frustums.directions.reshape(-1, 3)
